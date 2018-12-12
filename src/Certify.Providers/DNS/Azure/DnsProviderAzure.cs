@@ -12,6 +12,7 @@ namespace Certify.Providers.DNS.Azure
 {
     public class DnsProviderAzure : DnsProviderBase, IDnsProvider
     {
+        private ILog _log;
         private DnsManagementClient _dnsClient;
 
         private Dictionary<string, string> _credentials;
@@ -44,7 +45,8 @@ namespace Certify.Providers.DNS.Azure
                         new ProviderParameter{Key="clientid", Name="Application Id", IsRequired=false },
                         new ProviderParameter{Key="secret",Name="Svc Principal Secret", IsRequired=true , IsPassword=true},
                         new ProviderParameter{Key="subscriptionid",Name="DNS Subscription Id", IsRequired=true , IsPassword=false},
-                        new ProviderParameter{Key="resourcegroupname",Name="Resource Group Name", IsRequired=true , IsPassword=false}
+                        new ProviderParameter{Key="resourcegroupname",Name="Resource Group Name", IsRequired=true , IsPassword=false},
+                        new ProviderParameter{ Key="zoneid",Name="DNS Zone Name", IsRequired=true, IsPassword=false, IsCredential=false }
                     },
                     ChallengeType = Models.SupportedChallengeTypes.CHALLENGE_TYPE_DNS,
                     Config = "Provider=Certify.Providers.DNS.Azure",
@@ -80,8 +82,10 @@ namespace Certify.Providers.DNS.Azure
             }
         }
 
-        public async Task<bool> InitProvider()
+        public async Task<bool> InitProvider(ILog log = null)
         {
+            _log = log;
+
             // https://docs.microsoft.com/en-us/dotnet/api/overview/azure/dns?view=azure-dotnet
 
             var serviceCreds = await ApplicationTokenProvider.LoginSilentAsync(
@@ -120,13 +124,30 @@ namespace Certify.Providers.DNS.Azure
 
             try
             {
+                var currentRecord = await _dnsClient.RecordSets.GetAsync(_credentials["resourcegroupname"], request.ZoneId, recordName, RecordType.TXT);
+
+                if (currentRecord != null && currentRecord.TxtRecords.Any())
+                {
+                    foreach (var record in currentRecord.TxtRecords)
+                    {
+                        recordSetParams.TxtRecords.Add(record);
+                    }
+                }
+
+            } catch {
+                // No record exist
+            }
+
+            try
+            {
                 var result = await _dnsClient.RecordSets.CreateOrUpdateAsync(
                        _credentials["resourcegroupname"],
                        request.ZoneId,
                        recordName,
                        RecordType.TXT,
                        recordSetParams
-               );
+                );
+                               
 
                 if (result != null)
                 {

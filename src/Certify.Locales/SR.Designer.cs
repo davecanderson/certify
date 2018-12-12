@@ -133,7 +133,7 @@ namespace Certify.Locales {
         }
         
         /// <summary>
-        ///   Looks up a localized string similar to This version is free for evaluation and is limited to managing up to 5 websites. To remove this limit please purchase a registration key. If you have previously donated please email apps@webprofusion.com with details of your sponsorship PayPal transaction to obtain a free key. This offer is also open to developers who have PRs accepted for this app on GitHub..
+        ///   Looks up a localized string similar to This version is free for evaluation and is limited to managing up to 5 certificates. To remove this limit please purchase a registration key. If you have previously donated please email apps@webprofusion.com with details of your sponsorship PayPal transaction to obtain a free key. This offer is also open to developers who have PRs accepted for this app on GitHub..
         /// </summary>
         public static string AboutControl_TrialDetailLabel {
             get {
@@ -601,7 +601,7 @@ namespace Certify.Locales {
         }
         
         /// <summary>
-        ///   Looks up a localized string similar to Note: these setting only apply to new https bindings, existing bindings are only updated with the new certificate..
+        ///   Looks up a localized string similar to Note: these setting only apply to new https bindings, existing bindings are only updated with the new certificate. Using a fixed IP for multiple certificates will cause a binding conflict on Windows, use with caution..
         /// </summary>
         public static string ManagedCertificateSettings_BindingNote {
             get {
@@ -1170,7 +1170,7 @@ namespace Certify.Locales {
         }
         
         /// <summary>
-        ///   Looks up a localized string similar to Ooops, you forgot to provide a valid email address..
+        ///   Looks up a localized string similar to There was a problem registering with Let&apos;s Encrypt using this email address. Check the email address is valid and that this computer has an open connection to the internet (outgoing https is required for API calls)..
         /// </summary>
         public static string New_Contact_EmailError {
             get {
@@ -1539,6 +1539,15 @@ namespace Certify.Locales {
         }
         
         /// <summary>
+        ///   Looks up a localized string similar to Enable Certificate Cleanup.
+        /// </summary>
+        public static string Settings_EnableCertificateCleanup {
+            get {
+                return ResourceManager.GetString("Settings_EnableCertificateCleanup", resourceCulture);
+            }
+        }
+        
+        /// <summary>
         ///   Looks up a localized string similar to Enable DNS Validations checks (Resolution, CAA, DNSSEC).
         /// </summary>
         public static string Settings_EnableDnsValidation {
@@ -1557,11 +1566,29 @@ namespace Certify.Locales {
         }
         
         /// <summary>
+        ///   Looks up a localized string similar to Enable Http Challenge Server.
+        /// </summary>
+        public static string Settings_EnableHttpChallengeServer {
+            get {
+                return ResourceManager.GetString("Settings_EnableHttpChallengeServer", resourceCulture);
+            }
+        }
+        
+        /// <summary>
         ///   Looks up a localized string similar to Enable proxy API for domain config checks.
         /// </summary>
         public static string Settings_EnableProxyApiForDomainConfig {
             get {
                 return ResourceManager.GetString("Settings_EnableProxyApiForDomainConfig", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized string similar to Enable Status Reports to Dashboard.
+        /// </summary>
+        public static string Settings_EnableStatusReporting {
+            get {
+                return ResourceManager.GetString("Settings_EnableStatusReporting", resourceCulture);
             }
         }
         

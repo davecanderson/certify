@@ -28,10 +28,10 @@ namespace Certify.Core.Management.Challenges
         /// Simulates responding to a challenge, performs a sample configuration and attempts to
         /// verify it.
         /// </summary>
-        /// <param name="serverManager"></param>
-        /// <param name="managedCertificate"></param>
+        /// <param name="serverManager">  </param>
+        /// <param name="managedCertificate">  </param>
         /// <returns> APIResult </returns>
-        /// <remarks>
+        /// <remarks> 
         /// The purpose of this method is to test the options (permissions, configuration) before
         /// submitting a request to the ACME server, to avoid creating failed requests and hitting
         /// usage limits.
@@ -59,8 +59,8 @@ namespace Certify.Core.Management.Challenges
             domains = domains.Distinct().ToList();
 
             // if wildcard domain included, check first level labels not also specified, i.e.
-            // *.example.com & www.example.com cannot be mixed, but *.example.com &
-            //  test.wwww.example.com can
+            // *.example.com & www.example.com cannot be mixed, but example.com, *.example.com &
+            // test.wwww.example.com can
             var invalidLabels = new List<string>();
             if (domains.Any(d => d.StartsWith("*.")))
             {
@@ -68,7 +68,7 @@ namespace Certify.Core.Management.Challenges
                 {
                     var rootDomain = wildcard.Replace("*.", "");
                     // add list of domains where label count exceeds root domain label count
-                    invalidLabels.AddRange(domains.Where(domain => domain == rootDomain || (domain != wildcard && domain.EndsWith(rootDomain) && domain.Count(s => s == '.') == wildcard.Count(s => s == '.'))));
+                    invalidLabels.AddRange(domains.Where(domain => domain != wildcard && domain.EndsWith(rootDomain) && domain.Count(s => s == '.') == wildcard.Count(s => s == '.')));
 
                     if (invalidLabels.Any())
                     {
@@ -85,24 +85,32 @@ namespace Certify.Core.Management.Challenges
                 // if DNS checks enabled, attempt them here
                 if (isPreviewMode && enableDnsChecks)
                 {
+                    bool includeIPResolution = false;
+                    if (managedCertificate.RequestConfig.Challenges.Any(c => c.ChallengeType == SupportedChallengeTypes.CHALLENGE_TYPE_HTTP))
+                    {
+                        includeIPResolution = true;
+                    }
+
                     log.Information("Performing preview DNS tests. {managedItem}", managedCertificate);
 
                     var tasks = new List<Task<List<ActionResult>>>();
 
                     foreach (var d in domains)
                     {
-                        tasks.Add(_netUtil.CheckDNS(log, d.Replace("*.", "")));
+                        tasks.Add(_netUtil.CheckDNS(log, d.Replace("*.", ""), includeIPResolution));
                     }
 
                     var allResults = await Task.WhenAll(tasks);
 
+                    // add DNS check results. DNS check fails are considered a warning instead of an error.
                     foreach (var checkResults in allResults)
                     {
                         foreach (var c in checkResults)
                         {
                             results.Add(new StatusMessage
                             {
-                                IsOK = c.IsSuccess,
+                                IsOK = true,
+                                HasWarning = !c.IsSuccess,
                                 Message = c.Message
                             });
                         }
@@ -210,13 +218,13 @@ namespace Certify.Core.Management.Challenges
                         var dnsResult =
                              await PerformChallengeResponse_Dns01(
                                 log,
-                                domain,
+                                domain.Replace("*.", ""),
                                 managedCertificate,
                                 simulatedAuthorization
                             );
 
-                        result.Message = dnsResult.Message;
-                        result.IsOK = dnsResult.IsSuccess;
+                        result.Message = dnsResult.Result.Message;
+                        result.IsOK = dnsResult.Result.IsSuccess;
 
                         results.Add(result);
                     }
@@ -295,8 +303,10 @@ namespace Certify.Core.Management.Challenges
                     {
                         // perform dns-01 challenge response
                         var check = await PerformChallengeResponse_Dns01(log, domain, managedCertificate, pendingAuth);
-                        pendingAuth.AttemptedChallenge.ConfigCheckedOK = check.IsSuccess;
-                        pendingAuth.AttemptedChallenge.ChallengeResultMsg = check.Message;
+                        pendingAuth.AttemptedChallenge.ConfigCheckedOK = check.Result.IsSuccess;
+                        pendingAuth.AttemptedChallenge.ChallengeResultMsg = check.Result.Message;
+                        pendingAuth.AttemptedChallenge.IsAwaitingUser = check.IsAwaitingUser;
+                        pendingAuth.AttemptedChallenge.PropagationSeconds = check.PropagationSeconds;
                     }
                 }
             }
@@ -304,7 +314,7 @@ namespace Certify.Core.Management.Challenges
         }
 
         /// <summary>
-        /// Prepares IIS to respond to a http-01 challenge 
+        /// Prepares IIS to respond to a http-01 challenge
         /// </summary>
         /// <returns> Test the challenge response locally. </returns>
         private async Task<ActionResult> PerformChallengeResponse_Http01(ILog log, ICertifiedServer iisManager, string domain, ManagedCertificate managedCertificate, PendingAuthorization pendingAuth)
@@ -319,15 +329,26 @@ namespace Certify.Core.Management.Challenges
                 return new ActionResult { IsSuccess = false, Message = msg };
             }
 
-            log.Information("Preparing challenge response for Let's Encrypt server to check at: {uri}", httpChallenge.ResourceUri);
+            log.Information($"Preparing challenge response for Let's Encrypt server to check at: {httpChallenge.ResourceUri} with content {httpChallenge.Value}");
             log.Information("If the challenge response file is not accessible at this exact URL the validation will fail and a certificate will not be issued.");
 
-            // get website root path, expand environment variables if required
+            // get website root path (from challenge config or fallback to deprecated
+            // WebsiteRootPath), expand environment variables if required
             var websiteRootPath = requestConfig.WebsiteRootPath;
+            var challengeConfig = managedCertificate.GetChallengeConfig(domain);
+            if (!string.IsNullOrEmpty(challengeConfig.ChallengeRootPath))
+            {
+                websiteRootPath = challengeConfig.ChallengeRootPath;
+            }
 
             if (!string.IsNullOrEmpty(managedCertificate.ServerSiteId))
             {
                 var siteInfo = await iisManager.GetSiteById(managedCertificate.ServerSiteId);
+
+                if (siteInfo == null)
+                {
+                    return new ActionResult { IsSuccess = false, Message = "IIS Website unavailable. Site may be removed or IIS is unavailable" };
+                }
 
                 // if website root path not specified, determine it now
                 if (string.IsNullOrEmpty(websiteRootPath))
@@ -383,7 +404,7 @@ namespace Certify.Core.Management.Challenges
 
             // copy challenge response to web folder /.well-known/acme-challenge. Check if it already
             // exists (as in 'configcheck' file) as can cause conflicts.
-            if (!File.Exists(destFile))
+            if (!File.Exists(destFile) || !destFile.EndsWith("configcheck"))
             {
                 try
                 {
@@ -405,7 +426,7 @@ namespace Certify.Core.Management.Challenges
             {
                 if (!destFile.EndsWith("configcheck") && File.Exists(destFile))
                 {
-                    log.Verbose("Challenge Cleanup: Removing {file}", destFile);
+                    log.Debug("Challenge Cleanup: Removing {file}", destFile);
                     try
                     {
                         File.Delete(destFile);
@@ -414,8 +435,15 @@ namespace Certify.Core.Management.Challenges
                 }
             };
 
+            // if config checks are enabled but our last renewal was successful, skip auto config
+            // until we have failed twice
             if (requestConfig.PerformExtensionlessConfigChecks)
             {
+                if (managedCertificate.DateRenewed != null && managedCertificate.RenewalFailureCount < 2)
+                {
+                    return new ActionResult { IsSuccess = true, Message = $"Skipping URL access checks and auto config (if applicable): {httpChallenge.ResourceUri}. Will resume checks if renewal failure count exceeds 2 attempts." };
+                }
+
                 // first check if it already works with no changes
                 if (await _netUtil.CheckURL(log, httpChallenge.ResourceUri))
                 {
@@ -426,8 +454,8 @@ namespace Certify.Core.Management.Challenges
                 if (requestConfig.PerformAutoConfig)
                 {
                     // FIXME: need to only overwrite config we have auto populated, not user
-                    //        specified config, compare to our preconfig and only overwrite if same
-                    //        as ours? Or include preset key in our config, or make behaviour configurable
+                    // specified config, compare to our preconfig and only overwrite if same as ours?
+                    // Or include preset key in our config, or make behaviour configurable
                     LogAction($"Pre-config check failed: Auto-config will overwrite existing config: {destPath}\\web.config");
 
                     var configOptions = Directory.EnumerateFiles(Environment.CurrentDirectory + "\\Scripts\\Web.config\\", "*.config");
@@ -470,7 +498,7 @@ namespace Certify.Core.Management.Challenges
                 return new ActionResult
                 {
                     IsSuccess = false,
-                    Message = $"Config checks disabled. Could not verify URL: {httpChallenge.ResourceUri}"
+                    Message = $"Config checks disabled. Did not verify URL access: {httpChallenge.ResourceUri}"
                 };
             }
         }
@@ -511,7 +539,7 @@ namespace Certify.Core.Management.Challenges
 
                 log.Information($"Preparing binding at: https://{domain}, sni: {sni}");
 
-                var x509 = CertificateManager.GenerateTlsSni01Certificate(sni);
+                var x509 = CertificateManager.GenerateSelfSignedCertificate(sni);
 
                 CertificateManager.StoreCertificate(x509);
 
@@ -536,10 +564,8 @@ namespace Certify.Core.Management.Challenges
             return () => checkQueue.All(check => check());
         }
 
-        private async Task<ActionResult> PerformChallengeResponse_Dns01(ILog log, string domain, ManagedCertificate managedCertificate, PendingAuthorization pendingAuth)
+        private async Task<DnsChallengeHelperResult> PerformChallengeResponse_Dns01(ILog log, string domain, ManagedCertificate managedCertificate, PendingAuthorization pendingAuth)
         {
-            var requestConfig = managedCertificate.RequestConfig;
-
             var dnsChallenge = pendingAuth.Challenges.FirstOrDefault(c => c.ChallengeType == SupportedChallengeTypes.CHALLENGE_TYPE_DNS);
 
             if (dnsChallenge == null)
@@ -548,33 +574,40 @@ namespace Certify.Core.Management.Challenges
 
                 log.Warning(msg);
 
-                return new ActionResult
+                return new DnsChallengeHelperResult
                 {
-                    IsSuccess = false,
-                    Message = msg
+                    Result = new ActionResult
+                    {
+                        IsSuccess = false,
+                        Message = msg
+                    },
+                    IsAwaitingUser = false,
+                    PropagationSeconds = 0
                 };
             }
 
             // create DNS records (manually or via automation)
-            var dnsHelper = new DNSChallengeHelper();
+            var dnsHelper = new DnsChallengeHelper();
 
             var dnsResult = await dnsHelper.CompleteDNSChallenge(log, managedCertificate, domain, dnsChallenge.Key, dnsChallenge.Value);
 
-            if (!dnsResult.IsSuccess)
+            if (!dnsResult.Result.IsSuccess)
             {
-                log.Error($"DNS update failed: Failed {dnsResult.Message}");
+                log.Error($"DNS update failed: {dnsResult.Result.Message}");
             }
             else
             {
-                log.Information($"DNS updated OK : {dnsResult.Message}");
+                log.Information($"DNS: {dnsResult.Result.Message}");
             }
 
             var cleanupQueue = new List<Action> { };
 
-            // TODO: add cleanup actions to queue cleanupQueue.Add(() => remove temp txt record);
-
             // configure cleanup actions for use after challenge completes
-            pendingAuth.Cleanup = () => cleanupQueue.ForEach(a => a());
+            pendingAuth.Cleanup = async () =>
+               {
+                   var result = await dnsHelper.DeleteDNSChallenge(log, managedCertificate, domain, dnsChallenge.Key);
+                   //log.Information(result.Result?.Message);
+               };
 
             return dnsResult;
         }

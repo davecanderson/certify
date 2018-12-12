@@ -10,9 +10,7 @@ using Newtonsoft.Json;
 namespace Certify.Providers.DNS.GoDaddy
 {
     /// <summary>
-    /// Adapted from
-    /// https://github.com/ebekker/ACMESharp/tree/master/ACMESharp/ACMESharp.Providers.CloudFlare By
-    /// janpieterz and ebekker, used with permission under MIT license
+    /// GoDaddy DNS API Provider contributed by https://github.com/alphaz18
     /// </summary>
     internal class Zone
     {
@@ -33,8 +31,9 @@ namespace Certify.Providers.DNS.GoDaddy
         public DnsRecord[] Result { get; set; }
     }
 
-    public class DnsProviderGoDaddy : IDnsProvider
+    public class DnsProviderGoDaddy : DnsProviderBase, IDnsProvider
     {
+        private ILog _log;
         private HttpClient _client = new HttpClient();
         private readonly string _authKey;
         private readonly string _authSecret;
@@ -69,8 +68,9 @@ namespace Certify.Providers.DNS.GoDaddy
                     HelpUrl = "http://docs.certifytheweb.com/docs/dns-godaddy.html",
                     PropagationDelaySeconds = 60,
                     ProviderParameters = new List<ProviderParameter>{
-                        new ProviderParameter{Key="authkey", Name="Auth Key", IsRequired=true },
-                        new ProviderParameter{Key="authsecret", Name="Auth Secret", IsRequired=true }
+                        new ProviderParameter{ Key="authkey", Name="Auth Key", IsRequired=true },
+                        new ProviderParameter{ Key="authsecret", Name="Auth Secret", IsRequired=true },
+                        new ProviderParameter{ Key="zoneid", Name="DNS Zone Id", IsRequired=true, IsPassword=false, IsCredential=false }
                     },
                     ChallengeType = Models.SupportedChallengeTypes.CHALLENGE_TYPE_DNS,
                     Config = "Provider=Certify.Providers.DNS.GoDaddy",
@@ -114,19 +114,9 @@ namespace Certify.Providers.DNS.GoDaddy
             return request;
         }
 
-        private async Task<List<DnsRecord>> GetDnsRecords(string zoneName)
+        private async Task<List<DnsRecord>> GetDnsRecords(string tldName)
         {
-            List<DnsRecord> records = new List<DnsRecord>();
-
-            string[] domains = zoneName.Split(new char[] { '.' });
-            string tldName = domains[domains.Length - 2] + "." + domains[domains.Length - 1];
-            string sub = "";
-
-            for (int i = 0; i < domains.Length - 1; i++)
-            {
-                sub += domains[i];
-            }
-
+            var records = new List<DnsRecord>();
             var request = CreateRequest(HttpMethod.Get, $"{string.Format(_listRecordsUri, tldName, "TXT")}");
 
             var result = await _client.SendAsync(request);
@@ -136,7 +126,14 @@ namespace Certify.Providers.DNS.GoDaddy
                 var content = await result.Content.ReadAsStringAsync();
                 var dnsResult = JsonConvert.DeserializeObject<DnsRecordGoDaddy[]>(content);
 
-                records.AddRange(dnsResult.Select(x => new DnsRecord { RecordId = x.name, RecordName = x.name, RecordType = x.type, RecordValue = x.data }));
+                records.AddRange(dnsResult.Select(x => new DnsRecord
+                {
+                    RecordId = x.name,
+                    RecordName = x.name,
+                    RecordType = x.type,
+                    RecordValue = x.data,
+                    Data = x
+                }));
             }
             else
             {
@@ -149,9 +146,17 @@ namespace Certify.Providers.DNS.GoDaddy
         private async Task<ActionResult> AddDnsRecord(string zoneName, string recordname, string value)
         {
             var request = CreateRequest(new HttpMethod("PATCH"), string.Format(_createRecordUri, zoneName));
-            var rec = new DnsRecordGoDaddy();
-            rec.type = "TXT"; rec.name = recordname; rec.data = value; rec.ttl = 600;
+
+            var rec = new DnsRecordGoDaddy
+            {
+                type = "TXT",
+                name = recordname,
+                data = value,
+                ttl = 600
+            };
+
             var recarr = new object[] { rec };
+
             request.Content = new StringContent(
                 JsonConvert.SerializeObject(recarr)
                 );
@@ -213,52 +218,45 @@ namespace Certify.Providers.DNS.GoDaddy
 
         public async Task<ActionResult> CreateRecord(DnsRecord request)
         {
-            //check if record already exists
-            string[] domains = request.RecordName.Split(new char[] { '.' });
-            string tldName = domains[domains.Length - 2] + "." + domains[domains.Length - 1];
-            string sub = "";
-            for (int i = 0; i < domains.Length - 2; i++)
-            {
-                if (i == 0)
-                {
-                    sub += domains[i];
-                }
-                else
-                {
-                    sub += "." + domains[i];
-                }
-            }
-            var records = await GetDnsRecords(tldName);
-            var record = records.FirstOrDefault(x => x.RecordName == sub);
-
-            if (record != null)
-            {
-                return await UpdateDnsRecord(tldName, record, request.RecordValue);
-            }
-            else
-            {
-                return await AddDnsRecord(tldName, sub, request.RecordValue);
-            }
+            //TODO: check if record already exists and update instead
+            var root = await DetermineZoneDomainRoot(request.RecordName, request.ZoneId);
+            var recordName = NormaliseRecordName(root, request.RecordName);
+            return await AddDnsRecord(root.RootDomain, recordName, request.RecordValue);
         }
 
         public async Task<ActionResult> DeleteRecord(DnsRecord request)
         {
             // grab all the txt records for the zone as a json array, remove the txt record in
             // question, and send an update command.
-            var domainrecords = await GetDnsRecords(request.RootDomain);
-            var record = domainrecords.FirstOrDefault(x => x.RecordName + "." + request.RootDomain == request.RecordName + "." + request.TargetDomainName);
-            if (record == null)
+
+            var root = await DetermineZoneDomainRoot(request.RecordName, request.ZoneId);
+            var recordName = NormaliseRecordName(root, request.RecordName);
+            var domainrecords = await GetDnsRecords(root.RootDomain);
+
+            if (!domainrecords.Any())
+            {
+                return new ActionResult { IsSuccess = true, Message = "DNS record delete: nothing to do." };
+            }
+
+            var recordsToRemove = domainrecords.Where(x => x.RecordName + "." + root.RootDomain == request.RecordName).ToList();
+            if (!recordsToRemove.Any())
             {
                 return new ActionResult { IsSuccess = true, Message = "DNS record does not exist, nothing to delete." };
             }
 
-            domainrecords.Remove(record);
+            foreach (var r in recordsToRemove)
+            {
+                domainrecords.Remove(r);
+            }
 
-            var req = CreateRequest(HttpMethod.Put, string.Format(_deleteRecordUri, request.RootDomain, "TXT"));
+            // as the api does not support record delete, this is actually replacing the list of TXT records with the ones we no longer need removed
+            var req = CreateRequest(HttpMethod.Put, string.Format(_deleteRecordUri, root.RootDomain, "TXT"));
 
+            // send back list of record we are keeping, in their original format
             req.Content = new StringContent(
-                JsonConvert.SerializeObject(domainrecords)
+                JsonConvert.SerializeObject(domainrecords.Select(d => d.Data))
                 );
+
             req.Content.Headers.ContentType.MediaType = "application/json";
 
             var result = await _client.SendAsync(req);
@@ -277,7 +275,7 @@ namespace Certify.Providers.DNS.GoDaddy
             }
         }
 
-        public async Task<List<DnsZone>> GetZones()
+        public override async Task<List<DnsZone>> GetZones()
         {
             var zones = new List<DnsZone>();
 
@@ -292,7 +290,8 @@ namespace Certify.Providers.DNS.GoDaddy
 
                 foreach (var zone in zonesResult)
                 {
-                    zones.Add(new DnsZone { ZoneId = zone.DomainId, Name = zone.Domain });
+                    // DomainId is not used by the GoDaddy API, so we use the domain as the ID
+                    zones.Add(new DnsZone { ZoneId = zone.Domain, Name = zone.Domain });
                 }
             }
             else
@@ -303,8 +302,9 @@ namespace Certify.Providers.DNS.GoDaddy
             return zones;
         }
 
-        public async Task<bool> InitProvider()
+        public async Task<bool> InitProvider(ILog log = null)
         {
+            _log = log;
             return await Task.FromResult(true);
         }
     }

@@ -6,11 +6,12 @@ using System.Windows;
 using System.Windows.Input;
 using Certify.Locales;
 using Microsoft.ApplicationInsights;
+using Serilog;
 
 namespace Certify.UI
 {
     /// <summary>
-    /// Interaction logic for MainWindow.xaml 
+    /// Interaction logic for MainWindow.xaml
     /// </summary>
     public partial class MainWindow
     {
@@ -25,6 +26,8 @@ namespace Certify.UI
 
         protected Certify.UI.ViewModel.AppViewModel _appViewModel => UI.ViewModel.AppViewModel.Current;
         protected Certify.UI.ViewModel.ManagedCertificateViewModel _itemViewModel => UI.ViewModel.ManagedCertificateViewModel.Current;
+        private const int NUM_ITEMS_FOR_REMINDER = 3;
+        private const int NUM_ITEMS_FOR_LIMIT = 10;
 
         public int NumManagedCertificates
         {
@@ -53,17 +56,25 @@ namespace Certify.UI
             MessageBox.Show("You are using an alpha version of Certify The Web. You should only use this version for testing and should not consider it suitable for use on production servers.");
 #endif
 
+#if BETA
+            MessageBox.Show("You are using a beta version of Certify The Web. Please report any issues you find.");
+#endif
+
             // save or discard site changes before creating a new site/certificate
             if (!await _itemViewModel.ConfirmDiscardUnsavedChanges()) return;
 
-            if (!_appViewModel.IsRegisteredVersion && _appViewModel.ManagedCertificates != null && _appViewModel.ManagedCertificates.Count >= 5)
+            if (!_appViewModel.IsRegisteredVersion && _appViewModel.ManagedCertificates != null && _appViewModel.ManagedCertificates.Count >= 3)
             {
                 MessageBox.Show(SR.MainWindow_TrialLimitationReached);
-                return;
+
+                if (_appViewModel.ManagedCertificates?.Count >= NUM_ITEMS_FOR_LIMIT)
+                {
+                    return;
+                }
             }
             else
             {
-                if (_appViewModel.IsRegisteredVersion && _appViewModel.ManagedCertificates?.Count >= 5)
+                if (_appViewModel.IsRegisteredVersion && _appViewModel.ManagedCertificates?.Count >= NUM_ITEMS_FOR_REMINDER)
                 {
                     var licensingManager = ViewModel.AppViewModel.Current.PluginManager?.LicensingManager;
 
@@ -75,7 +86,7 @@ namespace Certify.UI
             }
 
             // check user has registered a contact with LE first
-            if (String.IsNullOrEmpty(_appViewModel.PrimaryContactEmail))
+            if (string.IsNullOrEmpty(_appViewModel.PrimaryContactEmail))
             {
                 EnsureContactRegistered();
                 return;
@@ -87,6 +98,9 @@ namespace Certify.UI
 
             _appViewModel.SelectedItem = null; // deselect site list item
             _appViewModel.SelectedItem = new Certify.Models.ManagedCertificate();
+
+            //default to auto deploy for new managed certs
+            _appViewModel.SelectedItem.RequestConfig.DeploymentSiteOption = Models.DeploymentOption.Auto; 
         }
 
         private async void Button_RenewAll(object sender, RoutedEventArgs e)
@@ -133,7 +147,7 @@ namespace Certify.UI
             if (!_appViewModel.IsServiceAvailable)
             {
                 _appViewModel.IsLoading = false;
-                MessageBox.Show("Certify SSL Manager service is not started. Please restart the service.");
+                MessageBox.Show("Certify SSL Manager service is not started. Please restart the service. If this problem persists please contact support@certifytheweb.com.");
                 App.Current.Shutdown();
                 return;
             }
@@ -141,12 +155,14 @@ namespace Certify.UI
             var diagnostics = await Management.Util.PerformAppDiagnostics();
             if (diagnostics.Any(d => d.IsSuccess == false))
             {
-                MessageBox.Show(diagnostics.First(d => d.IsSuccess == false).Message);
+                MessageBox.Show(diagnostics.First(d => d.IsSuccess == false).Message, "Warning");
             }
-            //init telemetry if enabled
+
+            // init telemetry if enabled
             InitTelemetry();
 
-            //check version capabilities
+            // setup plugins
+
             _appViewModel.PluginManager = new Management.PluginManager();
 
             _appViewModel.PluginManager.LoadPlugins();

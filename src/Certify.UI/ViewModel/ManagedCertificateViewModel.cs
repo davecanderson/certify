@@ -7,6 +7,7 @@ using System.Windows.Forms;
 using System.Windows.Input;
 using Certify.Locales;
 using Certify.Models;
+using Certify.Shared.Utils;
 using PropertyChanged;
 
 namespace Certify.UI.ViewModel
@@ -450,12 +451,6 @@ namespace Certify.UI.ViewModel
                         {
                             managedCertificate.Name = SelectedWebSite.SiteName;
                         }
-
-                        //set defaults first
-                        if (!String.IsNullOrEmpty(SelectedWebSite.PhysicalPath))
-                        {
-                            managedCertificate.RequestConfig.WebsiteRootPath = Environment.ExpandEnvironmentVariables(SelectedWebSite.PhysicalPath);
-                        }
                     }
 
                     // remove domain options not manually added
@@ -491,6 +486,7 @@ namespace Certify.UI.ViewModel
         public bool UpdateDomainOptions(string domains)
         {
             var item = SelectedItem;
+            var wildcardAdded = false;
 
             // parse text input to add as manual domain options
 
@@ -518,6 +514,11 @@ namespace Certify.UI.ViewModel
                                 if (item.DomainOptions.Count == 0) option.IsPrimaryDomain = true;
 
                                 item.DomainOptions.Add(option);
+
+                                if (option.Domain.StartsWith("*."))
+                                {
+                                    wildcardAdded = true;
+                                }
                             }
                             else
                             {
@@ -533,6 +534,29 @@ namespace Certify.UI.ViewModel
                 {
                     MessageBox.Show("Invalid domains: " + invalidDomains);
                     return false;
+                }
+
+                if (wildcardAdded && !SelectedItem.RequestConfig.Challenges.Any(c => c.ChallengeType == SupportedChallengeTypes.CHALLENGE_TYPE_DNS))
+                {
+                    // wildcard added but no DNS challenges exist yet
+                    MessageBox.Show("You have added a wildcard domain, you will also need to configure a corresponding DNS challenge under Authorization. ");
+                }
+
+                if (wildcardAdded)
+                {
+                    //if a wildcard was added but the non-wildcard domain has not yet been added, offer to add it
+                    var wildcardOnlyDomains = domainList.Where(d => d.StartsWith("*.") && !item.DomainOptions.Any(o => o.Domain == d.Replace("*.", "")));
+                    if (wildcardOnlyDomains.Any())
+                    {
+                        var msg = $"You had added wildcard domains without the corresponding non-wildcard version: {string.Join(",", wildcardOnlyDomains)}. Would you like to add the non-wildcard versions as well?";
+                        if (MessageBox.Show(msg,"Add non-wildcard equivalent domains?", MessageBoxButtons.YesNo)== DialogResult.Yes)
+                        {
+
+                            var addedDomains = string.Join(";", wildcardOnlyDomains);
+                            addedDomains = addedDomains.Replace("*.", "");
+                            UpdateDomainOptions(addedDomains);
+                        }
+                    }
                 }
             }
 

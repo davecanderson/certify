@@ -70,7 +70,7 @@ namespace Certify.Service
             // perform challenge response test, log to string list and return in result
             var logList = new List<string>();
             using (var log = new LoggerConfiguration()
-                     .WriteTo.Debug()
+
                      .WriteTo.Sink(new ProgressLogSink(progressIndicator, managedCertificate, _certifyManager))
                      .CreateLogger())
             {
@@ -101,8 +101,8 @@ namespace Certify.Service
             return await _certifyManager.PerformRenewalAllManagedCertificates(true, null);
         }
 
-        [HttpGet, Route("renewcert/{managedItemId}")]
-        public async Task<CertificateRequestResult> BeginCertificateRequest(string managedItemId)
+        [HttpGet, Route("renewcert/{managedItemId}/{resumePaused}")]
+        public async Task<CertificateRequestResult> BeginCertificateRequest(string managedItemId, bool resumePaused)
         {
             DebugLog();
 
@@ -117,10 +117,11 @@ namespace Certify.Service
 
             //begin request
             var result = await _certifyManager.PerformCertificateRequest(
-                ManagedCertificateLog.GetLogger(managedCertificate.Id),
-                managedCertificate,
-                progressIndicator
-                );
+                                                                           null,
+                                                                            managedCertificate,
+                                                                            progressIndicator,
+                                                                            resumePaused
+                                                                            );
             return result;
         }
 
@@ -140,7 +141,7 @@ namespace Certify.Service
 
             var managedCertificate = await _certifyManager.GetManagedCertificate(managedItemId);
             var result = await _certifyManager.RevokeCertificate(
-                  ManagedCertificateLog.GetLogger(managedCertificate.Id),
+                  null,
                   managedCertificate
                   );
             return result;
@@ -162,29 +163,41 @@ namespace Certify.Service
         {
             return await Core.Management.Challenges.ChallengeProviders.GetChallengeAPIProviders();
         }
-    }
 
-    public class ProgressLogSink : Serilog.Core.ILogEventSink
-    {
-        private IProgress<RequestProgressState> _progress;
-        private ManagedCertificate _item;
-        private ICertifyManager _certifyManager;
-
-        public ProgressLogSink(IProgress<RequestProgressState> progress, ManagedCertificate item, ICertifyManager certifyManager)
+        [HttpGet, Route("currentchallenges/")]
+        public async Task<List<SimpleAuthorizationChallengeItem>> GetCurrentChallenges()
         {
-            _progress = progress;
-            _item = item;
-            _certifyManager = certifyManager;
+            return await _certifyManager.GetCurrentChallengeResponses(SupportedChallengeTypes.CHALLENGE_TYPE_HTTP);
         }
 
-        public void Emit(Serilog.Events.LogEvent logEvent)
+        [HttpGet, Route("dnszones/{providerTypeId}/{credentialId}")]
+        public async Task<List<Models.Providers.DnsZone>> GetDnsProviderZones(string providerTypeId, string credentialId)
         {
-            var message = logEvent.RenderMessage();
+            return await _certifyManager.GetDnsProviderZones(providerTypeId, credentialId);
+        }
 
-            _certifyManager.ReportProgress(_progress,
-                new RequestProgressState(RequestState.Running, message, _item, true),
-                logThisEvent: false
-                );
+        public class ProgressLogSink : Serilog.Core.ILogEventSink
+        {
+            private IProgress<RequestProgressState> _progress;
+            private ManagedCertificate _item;
+            private ICertifyManager _certifyManager;
+
+            public ProgressLogSink(IProgress<RequestProgressState> progress, ManagedCertificate item, ICertifyManager certifyManager)
+            {
+                _progress = progress;
+                _item = item;
+                _certifyManager = certifyManager;
+            }
+
+            public void Emit(Serilog.Events.LogEvent logEvent)
+            {
+                var message = logEvent.RenderMessage();
+
+                _certifyManager.ReportProgress(_progress,
+                    new RequestProgressState(RequestState.Running, message, _item, true),
+                    logThisEvent: false
+                    );
+            }
         }
     }
 }

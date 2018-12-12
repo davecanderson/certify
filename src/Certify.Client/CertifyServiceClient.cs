@@ -31,11 +31,6 @@ namespace Certify.Client
     public class CertifyServiceClient : ICertifyClient
     {
         private HttpClient _client;
-#if DEBUG
-        private string _baseUri = Certify.Locales.ConfigResources.LocalServiceBaseURIDebug + "/api/";
-#else
-        private string _baseUri = Certify.Locales.ConfigResources.LocalServiceBaseURI + "/api/";
-#endif
 
         #region Status (SignalR)
 
@@ -54,22 +49,25 @@ namespace Certify.Client
         private IHubProxy hubProxy;
         private HubConnection connection;
 
-#if DEBUG
-        private string url = Certify.Locales.ConfigResources.LocalServiceBaseURIDebug + "/api/status";
-#else
-        private string url = Certify.Locales.ConfigResources.LocalServiceBaseURI + "/api/status";
-#endif
+        private string _statusHubUri = "/api/status";
+        private string _baseUri = "/api/";
 
         public CertifyServiceClient()
         {
+            var serviceConfig = Certify.SharedUtils.ServiceConfigManager.GetAppServiceConfig();
+
+            _baseUri = $"http://{serviceConfig.Host}:{serviceConfig.Port}" + _baseUri;
+            _statusHubUri = $"http://{serviceConfig.Host}:{serviceConfig.Port}" + _statusHubUri;
+
             // use windows authentication
             _client = new HttpClient(new HttpClientHandler() { UseDefaultCredentials = true });
+            _client.DefaultRequestHeaders.Add("User-Agent", "Certify/App");
             _client.Timeout = new TimeSpan(0, 20, 0); // 20 min timeout on service api calls
         }
 
         public async Task ConnectStatusStreamAsync()
         {
-            connection = new HubConnection(url);
+            connection = new HubConnection(_statusHubUri);
             connection.Credentials = System.Net.CredentialCache.DefaultCredentials;
             hubProxy = connection.CreateHubProxy("StatusHub");
 
@@ -280,9 +278,9 @@ namespace Certify.Client
             }
         }
 
-        public async Task<CertificateRequestResult> BeginCertificateRequest(string managedItemId)
+        public async Task<CertificateRequestResult> BeginCertificateRequest(string managedItemId, bool resumePaused)
         {
-            var response = await FetchAsync($"managedcertificates/renewcert/{managedItemId}");
+            var response = await FetchAsync($"managedcertificates/renewcert/{managedItemId}/{resumePaused}");
             return JsonConvert.DeserializeObject<CertificateRequestResult>(response);
         }
 
@@ -296,6 +294,12 @@ namespace Certify.Client
         {
             var response = await PostAsync($"managedcertificates/testconfig", site);
             return JsonConvert.DeserializeObject<List<StatusMessage>>(await response.Content.ReadAsStringAsync());
+        }
+
+        public async Task<List<Models.Providers.DnsZone>> GetDnsProviderZones(string providerTypeId, string credentialsId)
+        {
+            string json = await FetchAsync($"managedcertificates/dnszones/{providerTypeId}/{credentialsId}");
+            return JsonConvert.DeserializeObject<List<Models.Providers.DnsZone>>(json);
         }
 
         public async Task<List<ActionStep>> PreviewActions(ManagedCertificate site)

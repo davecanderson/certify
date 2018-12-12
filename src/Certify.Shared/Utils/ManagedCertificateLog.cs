@@ -1,5 +1,5 @@
 ﻿using System;
-using System.Collections.Generic;
+using System.Collections.Concurrent;
 using Certify.Models.Providers;
 using Serilog;
 
@@ -40,6 +40,11 @@ namespace Certify.Models
             _log.Information(template, propertyValues);
         }
 
+        public void Debug(string template, params object[] propertyValues)
+        {
+            _log.Debug(template, propertyValues);
+        }
+
         public void Verbose(string template, params object[] propertyValues)
         {
             _log.Verbose(template, propertyValues);
@@ -75,26 +80,22 @@ namespace Certify.Models
 
     public static class ManagedCertificateLog
     {
-        private static Dictionary<string, Serilog.Core.Logger> _managedItemLoggers { get; set; }
+        private static ConcurrentDictionary<string, Serilog.Core.Logger> _managedItemLoggers { get; set; }
 
         public static string GetLogPath(string managedItemId)
         {
             return Util.GetAppDataFolder() + "\\logs\\log_" + managedItemId.Replace(':', '_') + ".txt";
         }
 
-        public static ILog GetLogger(string managedItemId)
+        public static ILog GetLogger(string managedItemId, Serilog.Core.LoggingLevelSwitch logLevelSwitch)
         {
-            if (_managedItemLoggers == null) _managedItemLoggers = new Dictionary<string, Serilog.Core.Logger>();
+            if (string.IsNullOrEmpty(managedItemId)) return null;
 
-            Serilog.Core.Logger log = null;
+            if (_managedItemLoggers == null) _managedItemLoggers = new ConcurrentDictionary<string, Serilog.Core.Logger>();
 
-            if (_managedItemLoggers.ContainsKey(managedItemId))
+            Serilog.Core.Logger log = _managedItemLoggers.GetOrAdd(managedItemId, (key) =>
             {
-                log = _managedItemLoggers[managedItemId];
-            }
-            else
-            {
-                var logPath = GetLogPath(managedItemId);
+                var logPath = GetLogPath(key);
 
                 try
                 {
@@ -106,35 +107,43 @@ namespace Certify.Models
                 catch { }
 
                 log = new LoggerConfiguration()
-                    .MinimumLevel.Verbose()
+                    .MinimumLevel.ControlledBy(logLevelSwitch)
                     .WriteTo.Debug()
-                    .WriteTo.File(logPath, shared: true, flushToDiskInterval: new TimeSpan(0, 0, 10))
+                    .WriteTo.File(
+                        logPath, shared: true,
+                        flushToDiskInterval: new TimeSpan(0, 0, 10)
+                    )
                     .CreateLogger();
 
-                _managedItemLoggers.Add(managedItemId, log);
-            }
+                return log;
+            });
+
             return new Loggy(log);
         }
 
-        public static void AppendLog(string managedItemId, ManagedCertificateLogItem logItem)
+        public static void AppendLog(string managedItemId, ManagedCertificateLogItem logItem, Serilog.Core.LoggingLevelSwitch logLevelSwitch)
         {
-            var log = GetLogger(managedItemId);
+            var log = GetLogger(managedItemId, logLevelSwitch);
 
-            if (logItem.LogItemType == LogItemType.CertficateRequestFailed)
+            if (log != null)
             {
-                log.Error(logItem.Message);
-            }
-            else if (logItem.LogItemType == LogItemType.GeneralError)
-            {
-                log.Error(logItem.Message);
-            }
-            if (logItem.LogItemType == LogItemType.GeneralWarning)
-            {
-                log.Warning(logItem.Message);
-            }
-            else
-            {
-                log.Information(logItem.Message);
+
+                if (logItem.LogItemType == LogItemType.CertficateRequestFailed)
+                {
+                    log.Error(logItem.Message);
+                }
+                else if (logItem.LogItemType == LogItemType.GeneralError)
+                {
+                    log.Error(logItem.Message);
+                }
+                if (logItem.LogItemType == LogItemType.GeneralWarning)
+                {
+                    log.Warning(logItem.Message);
+                }
+                else
+                {
+                    log.Information(logItem.Message);
+                }
             }
         }
 

@@ -1,8 +1,8 @@
-﻿using Certify.Locales;
-using Microsoft.Owin.Hosting;
-using System;
+﻿using System;
 using System.Net.Http;
 using System.Threading.Tasks;
+using Certify.Management;
+using Microsoft.Owin.Hosting;
 using Topshelf;
 
 namespace Certify.Service
@@ -19,6 +19,12 @@ namespace Certify.Service
                 x.SetDisplayName("Certify SSL Manager Service");
                 x.SetDescription("Certify SSL/TLS Manager Service");
                 x.StartAutomaticallyDelayed();
+
+                x.OnException(ex =>
+                {
+                    // Do something with the exception
+                    LogException(ex);
+                });
 #if DEBUG
                 x.SetInstanceName("Debug");
 #else
@@ -36,6 +42,7 @@ namespace Certify.Service
                     r.OnCrashOnly();
                     r.SetResetPeriod(1);
                 });
+
                 x.Service<OwinService>(s =>
                 {
                     s.ConstructUsing(() => new OwinService());
@@ -45,30 +52,35 @@ namespace Certify.Service
             });
         }
 
-        private static void CurrentDomain_UnhandledException(object sender, UnhandledExceptionEventArgs e)
+        private static void LogException(object exceptionObject)
         {
-            // an unhandled exception has caused the service to crash
-
-            if (e.ExceptionObject != null)
+            // log exception
+            try
             {
-                //submit diagnostic info if connection available
+                var logPath = Util.GetAppDataFolder("logs") + "\\service.exceptions.log";
+                System.IO.File.AppendAllText(logPath, "Service Exception :: [" + DateTime.Now + "] :: " + ((Exception)exceptionObject).ToString());
+            }
+            catch { }
 
-                var API_BASE_URI = Locales.ConfigResources.APIBaseURI;
-
+            //submit diagnostic info if connection available and status reporting enabled
+            if (Management.CoreAppSettings.Current.EnableStatusReporting)
+            {
                 var client = new HttpClient();
+
+                var appVersion = Management.Util.GetAppVersion();
 
                 var jsonRequest = Newtonsoft.Json.JsonConvert.SerializeObject(
                     new Models.Shared.FeedbackReport
                     {
                         EmailAddress = "(service exception)",
-                        Comment = "An unhandled service exception has occurred.: " + ((Exception)e.ExceptionObject).ToString(),
+                        Comment = "An unhandled service exception has occurred.: " + ((Exception)exceptionObject).ToString(),
                         IsException = true,
-                        AppVersion = ConfigResources.AppName + " " + new Certify.Management.Util().GetAppVersion(),
+                        AppVersion = appVersion.ToString(),
                         SupportingData = new
                         {
                             Framework = Certify.Management.Util.GetDotNetVersion(),
                             OS = Environment.OSVersion.ToString(),
-                            AppVersion = ConfigResources.AppName + " " + new Certify.Management.Util().GetAppVersion(),
+                            AppVersion = Management.Util.GetAppVersion(),
                             IsException = true
                         }
                     });
@@ -78,13 +90,22 @@ namespace Certify.Service
                 {
                     Task.Run(async () =>
                     {
-                        await client.PostAsync(API_BASE_URI + "feedback/submit", data);
+                        await client.PostAsync(Models.API.Config.APIBaseURI + "feedback/submit", data);
                     });
                 }
                 catch (Exception exp)
                 {
                     System.Diagnostics.Debug.WriteLine(exp.ToString());
                 }
+            }
+        }
+        private static void CurrentDomain_UnhandledException(object sender, UnhandledExceptionEventArgs e)
+        {
+            // an unhandled exception has caused the service to crash
+
+            if (e.ExceptionObject != null)
+            {
+                LogException(e.ExceptionObject);
             }
         }
     }
@@ -95,16 +116,38 @@ namespace Certify.Service
 
         public void Start()
         {
-#if DEBUG
-            _webApp = WebApp.Start<APIHost>(Certify.Locales.ConfigResources.LocalServiceBaseURIDebug);
-#else
-            _webApp = WebApp.Start<APIHost>(Certify.Locales.ConfigResources.LocalServiceBaseURI);
-#endif
+            var serviceConfig = SharedUtils.ServiceConfigManager.GetAppServiceConfig();
+
+            var serviceUri = $"http://{serviceConfig.Host}:{serviceConfig.Port}";
+
+            try
+            {
+                _webApp = WebApp.Start<APIHost>(serviceUri);
+            }
+            catch (Exception)
+            {
+                System.Diagnostics.Debug.WriteLine($"Service failed to listen on {serviceUri}. Attempting to reallocate port.");
+                // failed to listen on service uri, attempt reconfiguration of port.
+                int currentPort = serviceConfig.Port;
+
+                int newPort = currentPort += 2;
+
+                serviceUri = $"http://{serviceConfig.Host}:{newPort}";
+
+                // if the http listener cannot bind here then the entire service will fail to start
+                _webApp = WebApp.Start<APIHost>(serviceUri);
+
+                // if that worked, save the new port setting
+                SharedUtils.ServiceConfigManager.SetAppServicePort(newPort);
+
+                System.Diagnostics.Debug.WriteLine($"Service started on {serviceUri}.");
+            }
+
         }
 
         public void Stop()
         {
-            _webApp.Dispose();
+            if (_webApp != null) _webApp.Dispose();
         }
     }
 }

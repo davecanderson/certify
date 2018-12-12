@@ -36,11 +36,16 @@ namespace Certify.Core.Tests.Unit
                 new BindingInfo{ SiteName="Test.com.au", Host="www.test.com.au", IP="*", HasCertificate=true, Protocol="http", Port=80, SiteId="3"},
                 new BindingInfo{ SiteName="Test.com.au", Host="dev.www.test.com.au", IP="*", HasCertificate=true, Protocol="http", Port=80, SiteId="3"},
 
-                // Site 4 : 1 one deeply nested subdomain and an alt domain, wilcard should mathch on
+                // Site 4 : 1 one deeply nested subdomain and an alt domain, wilcard should match on
                 // one item
                 new BindingInfo{ SiteName="Test", Host="test.com.hk", IP="*", HasCertificate=true, Protocol="https", Port=443, SiteId="4"},
                 new BindingInfo{ SiteName="Test", Host="dev.test.com", IP="*", HasCertificate=true, Protocol="http", Port=80, SiteId="4"},
-                new BindingInfo{ SiteName="Test", Host="dev.sub.test.com", IP="*", HasCertificate=true, Protocol="http", Port=80, SiteId="4"}
+                new BindingInfo{ SiteName="Test", Host="dev.sub.test.com", IP="*", HasCertificate=true, Protocol="http", Port=80, SiteId="4"},
+
+                // Site 5 : alternative https port
+                // one item
+                new BindingInfo{ SiteName="TestAltPort", Host="altport.com", IP="*", HasCertificate=true, Protocol="https", Port=9000, SiteId="5"},
+                new BindingInfo{ SiteName="TestAltPort", Host="altport.com", IP="*", HasCertificate=true, Protocol="https", Port=9001, SiteId="5"}
             };
         }
 
@@ -76,7 +81,8 @@ namespace Certify.Core.Tests.Unit
                             }
                         }),
                     PerformAutomatedCertBinding = true,
-                    WebsiteRootPath = "c:\\inetpub\\wwwroot"
+                    WebsiteRootPath = "c:\\inetpub\\wwwroot",
+                    DeploymentSiteOption = DeploymentOption.SingleSite
                 },
                 ItemType = ManagedCertificateType.SSL_LetsEncrypt_LocalIIS
             };
@@ -102,7 +108,7 @@ namespace Certify.Core.Tests.Unit
             managedCertificate.ServerSiteId = "1";
             managedCertificate.RequestConfig.PrimaryDomain = "*.test.com";
             preview = await bindingManager.StoreAndDeployManagedCertificate(deploymentTarget, managedCertificate, null, false, isPreviewOnly: true);
-            Assert.IsTrue(preview.Count == 2, "Should match 2 bindings");
+            Assert.IsTrue(preview.Count == 1, "Should match 1 binding (root level domain should be ignored using wildcard)");
 
             managedCertificate.ServerSiteId = "1";
             managedCertificate.RequestConfig.DeploymentSiteOption = DeploymentOption.AllSites;
@@ -114,7 +120,17 @@ namespace Certify.Core.Tests.Unit
             managedCertificate.RequestConfig.DeploymentSiteOption = DeploymentOption.AllSites;
             managedCertificate.RequestConfig.PrimaryDomain = "*.test.com";
             preview = await bindingManager.StoreAndDeployManagedCertificate(deploymentTarget, managedCertificate, null, false, isPreviewOnly: true);
-            Assert.IsTrue(preview.Count == 4, "Should match 4 bindings across all sites");
+            Assert.IsTrue(preview.Count == 3, "Should match 3 bindings across all sites");
+
+            managedCertificate.ServerSiteId = "5";
+            managedCertificate.RequestConfig.DeploymentSiteOption = DeploymentOption.AllSites;
+            managedCertificate.RequestConfig.PrimaryDomain = "altport.com";
+
+            preview = await bindingManager.StoreAndDeployManagedCertificate(deploymentTarget, managedCertificate, null, false, isPreviewOnly: true);
+            Assert.IsTrue(preview.Count == 2, "Should match 2 bindings across all sites");
+            Assert.IsTrue(preview.Count(b => b.Category == "Deployment.UpdateBinding" && b.Description.Contains(":9000")) == 1, "Should have 1 port 9000 binding");
+            Assert.IsTrue(preview.Count(b => b.Category == "Deployment.UpdateBinding" && b.Description.Contains(":9001")) == 1, "Should have 1 port 9001 binding");
+
 
             foreach (var a in preview)
             {
@@ -131,17 +147,28 @@ namespace Certify.Core.Tests.Unit
                 "*.test.co.uk"
             };
 
-            Assert.IsTrue(BindingDeploymentManager.IsDomainOrWildcardMatch(domains, "test.com"));
 
-            Assert.IsFalse(BindingDeploymentManager.IsDomainOrWildcardMatch(domains, "fred.com"));
+            Assert.IsFalse(ManagedCertificate.IsDomainOrWildcardMatch(domains, "test.com"));
 
-            Assert.IsFalse(BindingDeploymentManager.IsDomainOrWildcardMatch(domains, "*.fred.com"));
+            Assert.IsTrue(ManagedCertificate.IsDomainOrWildcardMatch(domains, "test.com", matchWildcardsToRootDomain: true));
 
-            Assert.IsTrue(BindingDeploymentManager.IsDomainOrWildcardMatch(domains, "*.test.com"));
+            Assert.IsFalse(ManagedCertificate.IsDomainOrWildcardMatch(domains, "thisisatest.com"));
 
-            Assert.IsTrue(BindingDeploymentManager.IsDomainOrWildcardMatch(domains, "www.test.co.uk"));
+            Assert.IsFalse(ManagedCertificate.IsDomainOrWildcardMatch(domains, "www.thisisatest.com"));
 
-            Assert.IsFalse(BindingDeploymentManager.IsDomainOrWildcardMatch(domains, "www.dev.test.co.uk"));
+            Assert.IsTrue(ManagedCertificate.IsDomainOrWildcardMatch(domains, "www.test.com"));
+
+            Assert.IsFalse(ManagedCertificate.IsDomainOrWildcardMatch(domains, "www.subdomain.test.com"));
+
+            Assert.IsFalse(ManagedCertificate.IsDomainOrWildcardMatch(domains, "fred.com"));
+
+            Assert.IsFalse(ManagedCertificate.IsDomainOrWildcardMatch(domains, "*.fred.com"));
+
+            Assert.IsTrue(ManagedCertificate.IsDomainOrWildcardMatch(domains, "*.test.com"));
+
+            Assert.IsTrue(ManagedCertificate.IsDomainOrWildcardMatch(domains, "www.test.co.uk"));
+
+            Assert.IsFalse(ManagedCertificate.IsDomainOrWildcardMatch(domains, "www.dev.test.co.uk"));
         }
 
         [TestMethod, Description("Detect if binding already exists")]
@@ -151,6 +178,9 @@ namespace Certify.Core.Tests.Unit
                 new BindingInfo{ Host="test.com", IP="0.0.0.0", Port=443, Protocol="https" },
                 new BindingInfo{ Host="www.test.com", IP="*", Port=80, Protocol="http" },
                 new BindingInfo{ Host="dev.test.com", IP="192.168.1.1", Port=80, Protocol="http" },
+                new BindingInfo{ Host="ftp.test.com", IP="*", Port=20, Protocol="ftp" },
+                new BindingInfo{ Host="", IP="192.168.1.1", Port=443, Protocol="https" },
+                new BindingInfo{ Host="", IP="*", Port=443, Protocol="https" },
             };
 
             var spec = new BindingInfo
@@ -186,6 +216,24 @@ namespace Certify.Core.Tests.Unit
                 IP = "192.168.1.1",
                 Port = 80,
                 Protocol = "http"
+            };
+            Assert.IsTrue(BindingDeploymentManager.HasExistingBinding(bindings, spec));
+
+            spec = new BindingInfo
+            {
+                Host = "ftp.test.com",
+                IP = "*",
+                Port = 20,
+                Protocol = "ftp"
+            };
+            Assert.IsTrue(BindingDeploymentManager.HasExistingBinding(bindings, spec));
+
+            spec = new BindingInfo
+            {
+                Host = null,
+                IP = "0.0.0.0",
+                Port = 443,
+                Protocol = "https"
             };
             Assert.IsTrue(BindingDeploymentManager.HasExistingBinding(bindings, spec));
         }

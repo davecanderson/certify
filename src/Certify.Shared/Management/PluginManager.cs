@@ -1,26 +1,30 @@
-﻿using Certify.Models.Plugins;
-using System;
-using System.ComponentModel.Composition;
-using System.Composition.Hosting;
+﻿using System;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Reflection;
+using Certify.Models.Plugins;
+using Serilog;
 
 namespace Certify.Management
 {
     public class PluginManager
     {
-        [Import]
         public ILicensingManager LicensingManager { get; set; }
-
-        [Import]
         public IDashboardClient DashboardClient { get; set; }
 
-        [Import]
-        public IACMEClientProvider AcmeClientProvider { get; set; }
+        private Models.Providers.ILog _log = null;
 
-        [Import]
-        public IVaultProvider VaultProvider { get; set; }
+        public PluginManager()
+        {
+            _log = new Models.Loggy(
+                    new LoggerConfiguration()
+                        .MinimumLevel.Information()
+                        .WriteTo.File(Management.Util.GetAppDataFolder("logs") + "\\plugins.log", shared: true, flushToDiskInterval: new TimeSpan(0, 0, 10))
+                        .CreateLogger()
+                );
+
+        }
 
         private string GetPluginFolderPath()
         {
@@ -29,53 +33,38 @@ namespace Certify.Management
             return path;
         }
 
-        private object LoadPlugin(string dllFileName, Type interfaceType)
+        private T LoadPlugin<T>(string dllFileName, Type interfaceType)
         {
             try
             {
-                var assembly = Assembly.LoadFrom(Path.Combine(GetPluginFolderPath(), dllFileName));
-                var configuration = new ContainerConfiguration().WithAssembly(assembly);
+                // https://stackoverflow.com/questions/10732933/can-i-use-activator-createinstance-with-an-interface
+                var loadedType = (from t in Assembly.LoadFrom(GetPluginFolderPath() + "\\" + dllFileName).GetExportedTypes()
+                                  where !t.IsInterface && !t.IsAbstract
+                                  where interfaceType.IsAssignableFrom(t)
+                                  select t)
+                                     .FirstOrDefault();
 
-                using (var container = configuration.CreateContainer())
-                {
-                    object plugin = container.GetExport(interfaceType);
-                    return plugin;
-                }
+                var obj = (T)Activator.CreateInstance(loadedType);
+ 
+                return obj;
             }
             catch (Exception exp)
             {
-                PluginLog(exp.ToString());
+                _log?.Error(exp.ToString());
             }
-            return null;
-        }
-
-        public void PluginLog(string msg)
-        {
-            var path = Certify.Management.Util.GetAppDataFolder() + "\\plugin_log.txt";
-            msg = "\r\n[" + DateTime.UtcNow.ToString() + "] " + msg;
-            if (System.IO.File.Exists(path))
-            {
-                System.IO.File.AppendAllText(path, msg);
-            }
-            else
-            {
-                System.IO.File.WriteAllText(path, msg);
-            }
+            return default(T);
         }
 
         public void LoadPlugins()
         {
             var s = Stopwatch.StartNew();
 
-            LicensingManager = LoadPlugin("Licensing.dll", typeof(ILicensingManager)) as ILicensingManager;
-            DashboardClient = LoadPlugin("DashboardClient.dll", typeof(IDashboardClient)) as IDashboardClient;
-
-            //AcmeClientProvider = LoadPlugin("Certify.Providers.ACMESharp.dll", typeof(IACMEClientProvider)) as IACMEClientProvider;
-            //VaultProvider = LoadPlugin("Certify.Providers.ACMESharp.dll", typeof(IVaultProvider)) as IVaultProvider;
+            LicensingManager = LoadPlugin<ILicensingManager>("Licensing.dll", typeof(ILicensingManager)) as ILicensingManager;
+            DashboardClient = LoadPlugin<IDashboardClient>("DashboardClient.dll", typeof(IDashboardClient)) as IDashboardClient;
 
             s.Stop();
 
-            Debug.WriteLine($"Plugin load took {s.ElapsedMilliseconds}ms");
+            _log?.Debug($"Plugin load took {s.ElapsedMilliseconds}ms");
         }
     }
 }

@@ -9,10 +9,10 @@
     xmlns:local="clr-namespace:Certify.UI.Controls.ManagedCertificate"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     xmlns:utils="clr-namespace:Certify.UI.Utils"
-    Height="432"
     VerticalAlignment="Top"
     d:DataContext="{d:DesignInstance Type=certifyui:ManagedCertificateDesignViewModel,
                                      IsDesignTimeCreatable=True}"
+    d:DesignHeight="432"
     d:DesignWidth="631.2"
     mc:Ignorable="d">
     <UserControl.Resources>
@@ -32,7 +32,7 @@
     </UserControl.Resources>
     <ScrollViewer VerticalScrollBarVisibility="Auto">
         <StackPanel Margin="8,0,8,8">
-            <StackPanel x:Name="RenewalFailed">
+            <StackPanel x:Name="RenewalFailed" Visibility="Collapsed">
 
                 <StackPanel Orientation="Horizontal">
                     <fa:ImageAwesome
@@ -102,7 +102,7 @@
                         TextWrapping="Wrap" />
                 </Border>
             </StackPanel>
-            <StackPanel x:Name="RenewalSuccess">
+            <StackPanel x:Name="RenewalSuccess" Visibility="Collapsed">
 
                 <StackPanel Orientation="Horizontal">
                     <fa:ImageAwesome
@@ -115,11 +115,25 @@
                         DockPanel.Dock="Top"
                         Foreground="{StaticResource AccentBaseColorBrush}"
                         Style="{StaticResource Subheading}">
-                        Auto Renewal Active
+                        Certificate Active
                     </TextBlock>
                 </StackPanel>
                 <!--  Renewal success messages  -->
                 <StackPanel MinHeight="80">
+                    <StackPanel Orientation="Horizontal">
+                        <Label
+                            Width="160"
+                            Content="Auto Renewal Enabled:"
+                            FontWeight="Bold" />
+                        <Label
+                            Content="Yes"
+                            FontWeight="Bold"
+                            Visibility="{Binding SelectedItem.IncludeInAutoRenew, Converter={StaticResource BoolToVisConverter}}" />
+                        <Label
+                            Content="No"
+                            FontWeight="Bold"
+                            Visibility="{Binding SelectedItem.IncludeInAutoRenew, Converter={StaticResource InvBoolVisConverter}}" />
+                    </StackPanel>
                     <StackPanel Orientation="Horizontal">
                         <Label
                             Width="160"
@@ -154,6 +168,41 @@
                 </StackPanel>
             </StackPanel>
 
+            <StackPanel x:Name="RenewalPaused" Visibility="Collapsed">
+
+                <StackPanel Orientation="Horizontal">
+                    <fa:ImageAwesome
+                        Height="16"
+                        Margin="4"
+                        Foreground="{StaticResource ValidationSummaryColor1}"
+                        Icon="PauseCircle" />
+
+                    <TextBlock
+                        DockPanel.Dock="Top"
+                        Foreground="{StaticResource ResourceKey=ValidationSummaryColor1}"
+                        Style="{StaticResource Subheading}"
+                        Text="Waiting for User Action" />
+                </StackPanel>
+                <!--  Renewal warning messages  -->
+                <StackPanel>
+
+                    <TextBlock
+                        Margin="0,0,0,0"
+                        Style="{StaticResource Instructions}"
+                        Text="Your action is required to complete this certificate request. Once completed, select 'Request Certificate' to resume." />
+                </StackPanel>
+                <Border Margin="0,0,0,0" Background="{DynamicResource {x:Static SystemColors.ControlLightLightBrushKey}}">
+
+                    <TextBox
+                        Margin="8,8,8,8"
+                        Padding="8,8,8,8"
+                        Foreground="Black"
+                        IsReadOnly="True"
+                        Text="{Binding SelectedItem.RenewalFailureMessage}"
+                        TextWrapping="WrapWithOverflow" />
+                </Border>
+            </StackPanel>
+
             <StackPanel>
                 <StackPanel Orientation="Horizontal">
                     <Button
@@ -176,7 +225,7 @@
                         </StackPanel>
                     </Button>
                 </StackPanel>
-                <ScrollViewer VerticalScrollBarVisibility="Visible" Visibility="Hidden">
+                <ScrollViewer VerticalScrollBarVisibility="Visible" Visibility="Collapsed">
                     <DockPanel>
 
                         <DataGrid

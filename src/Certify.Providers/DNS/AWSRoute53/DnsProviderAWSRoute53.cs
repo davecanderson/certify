@@ -7,14 +7,17 @@ using Amazon.Route53.Model;
 using Certify.Models;
 using Certify.Models.Config;
 using Certify.Models.Providers;
+using Newtonsoft.Json;
 
 namespace Certify.Providers.DNS.AWSRoute53
 {
     public class DnsProviderAWSRoute53 : IDnsProvider
     {
         private AmazonRoute53Client _route53Client;
+        private ILog _log;
 
-        public int PropagationDelaySeconds => Definition.PropagationDelaySeconds;
+        private int? _customPropagationDelay = null;
+        public int PropagationDelaySeconds => (_customPropagationDelay != null ? (int)_customPropagationDelay : Definition.PropagationDelaySeconds);
 
         public string ProviderId => Definition.Id;
 
@@ -39,7 +42,9 @@ namespace Certify.Providers.DNS.AWSRoute53
                     PropagationDelaySeconds = 60,
                     ProviderParameters = new List<ProviderParameter>{
                         new ProviderParameter{ Key="accesskey",Name="Access Key", IsRequired=true, IsPassword=false },
-                        new ProviderParameter{ Key="secretaccesskey",Name="Secret Access Key", IsRequired=true, IsPassword=true }
+                        new ProviderParameter{ Key="secretaccesskey",Name="Secret Access Key", IsRequired=true, IsPassword=true },
+                        new ProviderParameter{ Key="propagationdelay",Name="Propagation Delay Seconds (optional)", IsRequired=false, IsPassword=false, Value="60", IsCredential=false },
+                        new ProviderParameter{ Key="zoneid",Name="DNS Zone Id", IsRequired=true, IsPassword=false, IsCredential=false },
                     },
                     ChallengeType = SupportedChallengeTypes.CHALLENGE_TYPE_DNS,
                     Config = "Provider=Certify.Providers.DNS.AWSRoute53",
@@ -86,7 +91,7 @@ namespace Certify.Providers.DNS.AWSRoute53
                 }
                 else
                 {
-                    var zones = _route53Client.ListHostedZones();
+                    var zones = await _route53Client.ListHostedZonesAsync();
                     var zone = zones.HostedZones.Where(z => z.Name.Contains(request.TargetDomainName)).FirstOrDefault();
                     return zone;
                 }
@@ -119,7 +124,11 @@ namespace Certify.Providers.DNS.AWSRoute53
                 ChangeBatch = changeBatch
             };
 
-            var recordsetResponse = _route53Client.ChangeResourceRecordSets(recordsetRequest);
+            _log?.Debug($"Route53 :: ApplyDnsChange : ChangeResourceRecordSetsAsync: {JsonConvert.SerializeObject(recordsetRequest.ChangeBatch)} ");
+
+            var recordsetResponse = await _route53Client.ChangeResourceRecordSetsAsync(recordsetRequest);
+
+            _log?.Debug($"Route53 :: ApplyDnsChange : ChangeResourceRecordSetsAsync Response: {JsonConvert.SerializeObject(recordsetResponse)} ");
 
             // Monitor the change status
             var changeRequest = new GetChangeRequest()
@@ -127,13 +136,13 @@ namespace Certify.Providers.DNS.AWSRoute53
                 Id = recordsetResponse.ChangeInfo.Id
             };
 
-            while (ChangeStatus.PENDING == _route53Client.GetChange(changeRequest).ChangeInfo.Status)
+            while (ChangeStatus.PENDING == (await _route53Client.GetChangeAsync(changeRequest)).ChangeInfo.Status)
             {
                 System.Diagnostics.Debug.WriteLine("DNS change is pending.");
                 await Task.Delay(1500);
             }
 
-            System.Diagnostics.Debug.WriteLine("DNS change completed.");
+            _log?.Information("DNS change completed.");
 
             return true;
         }
@@ -146,27 +155,51 @@ namespace Certify.Providers.DNS.AWSRoute53
 
             if (zone != null)
             {
-                var recordSet = new ResourceRecordSet()
+                // get existing record set for current TXT records with this name
+                ListResourceRecordSetsResponse response = await _route53Client.ListResourceRecordSetsAsync(
+                    new ListResourceRecordSetsRequest
+                    {
+                        StartRecordName = request.RecordName,
+                        StartRecordType = "TXT",
+                        MaxItems = "1",
+                        HostedZoneId = zone.Id
+                    }
+                    );
+
+                var targetRecordSet = response.ResourceRecordSets.FirstOrDefault(r => (r.Name == request.RecordName || r.Name == request.RecordName + ".") && r.Type.Value == "TXT");
+
+                if (targetRecordSet != null)
                 {
-                    Name = request.RecordName,
-                    TTL = 5,
-                    Type = RRType.TXT,
-                    ResourceRecords = new List<ResourceRecord>
+                    targetRecordSet.ResourceRecords.Add(
+                          new ResourceRecord { Value = "\"" + request.RecordValue + "\"" }
+                        );
+                }
+                else
+                {
+                    targetRecordSet = new ResourceRecordSet()
+                    {
+                        Name = request.RecordName,
+                        TTL = 5,
+                        Type = RRType.TXT,
+                        ResourceRecords = new List<ResourceRecord>
                         {
                           new ResourceRecord { Value =  "\""+request.RecordValue+"\""}
                         }
-                };
+                    };
+                }
 
                 try
                 {
-                    var result = await ApplyDnsChange(zone, recordSet, ChangeAction.UPSERT);
-                }
-                catch (Exception exp)
-                {
-                    new ActionResult { IsSuccess = false, Message = exp.InnerException.Message };
-                }
+                    // requests for *.domain.com + domain.com use the same TXT record name, so we
+                    // need to allow multiple entires rather than doing Upsert
+                    var result = await ApplyDnsChange(zone, targetRecordSet, ChangeAction.UPSERT);
 
-                return new ActionResult { IsSuccess = true, Message = "Success" };
+                    return new ActionResult { IsSuccess = true, Message = $"Dns Record Created/Updated: {request.RecordName}" };
+                }
+                catch (AmazonRoute53Exception exp)
+                {
+                    return new ActionResult { IsSuccess = false, Message = $"Dns Record Create/Update: {request.RecordName} - {exp.Message}" };
+                }
             }
             else
             {
@@ -180,20 +213,39 @@ namespace Certify.Providers.DNS.AWSRoute53
 
             if (zone != null)
             {
-                var recordSet = new ResourceRecordSet()
+                _log?.Information($"Route53 :: Delete Record : Zone matched {zone.Id} {zone.Id} : Fetching TXT record set {request.RecordName} ");
+
+                var response = await _route53Client.ListResourceRecordSetsAsync(
+                    new ListResourceRecordSetsRequest
+                    {
+                        StartRecordName = request.RecordName,
+                        StartRecordType = "TXT",
+                        MaxItems = "1",
+                        HostedZoneId = zone.Id
+                    }
+                );
+
+                var targetRecordSet = response.ResourceRecordSets.FirstOrDefault(r => (r.Name == request.RecordName || r.Name == request.RecordName + ".") && r.Type.Value == "TXT");
+
+                if (targetRecordSet != null)
                 {
-                    Name = request.RecordName,
-                    TTL = 5,
-                    Type = RRType.TXT,
-                    ResourceRecords = new List<ResourceRecord>
-                        {
-                          new ResourceRecord { Value = "\""+request.RecordValue+"\""}
-                        }
-                };
+                    _log?.Information($"Route53 :: Delete Record : Fetched TXT record set OK {targetRecordSet.Name} ");
 
-                var result = ApplyDnsChange(zone, recordSet, ChangeAction.DELETE);
+                    try
+                    {
+                        var result = await ApplyDnsChange(zone, targetRecordSet, ChangeAction.DELETE);
 
-                return new ActionResult { IsSuccess = true, Message = "Success" };
+                        return new ActionResult { IsSuccess = true, Message = $"Dns Record Delete completed: {request.RecordName}" };
+                    }
+                    catch (AmazonRoute53Exception exp)
+                    {
+                        return new ActionResult { IsSuccess = false, Message = $"Dns Record Delete failed: {request.RecordName} - {exp.Message}" };
+                    }
+                }
+                else
+                {
+                    return new ActionResult { IsSuccess = true, Message = $"Dns Record Delete skipped (record set does not exist): {request.RecordName}" };
+                }
             }
             else
             {
@@ -218,8 +270,9 @@ namespace Certify.Providers.DNS.AWSRoute53
             return results;
         }
 
-        public async Task<bool> InitProvider()
+        public async Task<bool> InitProvider(ILog log = null)
         {
+            _log = log;
             return await Task.FromResult(true);
         }
     }

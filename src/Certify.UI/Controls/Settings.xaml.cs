@@ -7,7 +7,7 @@ using System.Windows.Input;
 namespace Certify.UI.Controls
 {
     /// <summary>
-    /// Interaction logic for Settings.xaml 
+    /// Interaction logic for Settings.xaml
     /// </summary>
     public partial class Settings : UserControl
     {
@@ -45,6 +45,26 @@ namespace Certify.UI.Controls
             this.IgnoreStoppedSites.IsChecked = _prefs.IgnoreStoppedSites;
 
             this.EnableDNSValidationChecks.IsChecked = _prefs.EnableDNSValidationChecks;
+            this.EnableHttpChallengeServer.IsChecked = _prefs.EnableHttpChallengeServer;
+
+            if (_prefs.CertificateCleanupMode == Models.CertificateCleanupMode.None)
+            {
+                this.CertCleanup_None.IsChecked = true;
+            }
+            else if (_prefs.CertificateCleanupMode == Models.CertificateCleanupMode.AfterExpiry)
+            {
+                this.CertCleanup_AfterExpiry.IsChecked = true;
+            }
+            else if (_prefs.CertificateCleanupMode == Models.CertificateCleanupMode.AfterRenewal)
+            {
+                this.CertCleanup_AfterRenewal.IsChecked = true;
+            }
+            else if (_prefs.CertificateCleanupMode == Models.CertificateCleanupMode.FullCleanup)
+            {
+                this.CertCleanup_FullCleanup.IsChecked = true;
+            }
+
+            this.EnableStatusReporting.IsChecked = _prefs.EnableStatusReporting;
 
             this.RenewalIntervalDays.Value = _prefs.RenewalIntervalDays;
             this.RenewalMaxRequests.Value = _prefs.MaxRenewalRequests;
@@ -85,12 +105,15 @@ namespace Certify.UI.Controls
                 _prefs.EnableAppTelematics = (this.EnableTelematicsCheckbox.IsChecked == true);
                 _prefs.EnableValidationProxyAPI = (this.EnableProxyAPICheckbox.IsChecked == true);
                 _prefs.EnableDNSValidationChecks = (this.EnableDNSValidationChecks.IsChecked == true);
+                _prefs.EnableHttpChallengeServer = (this.EnableHttpChallengeServer.IsChecked == true);
+
+                _prefs.EnableStatusReporting = (this.EnableStatusReporting.IsChecked == true);
 
                 _prefs.EnableEFS = (this.EnableEFS.IsChecked == true);
                 _prefs.IgnoreStoppedSites = (this.IgnoreStoppedSites.IsChecked == true);
 
                 // force renewal interval days to be between 1 and 60 days
-                if (this.RenewalIntervalDays.Value == null) this.RenewalIntervalDays.Value = 14;
+                if (this.RenewalIntervalDays.Value == null) this.RenewalIntervalDays.Value = 30;
                 if (this.RenewalIntervalDays.Value > 60) this.RenewalIntervalDays.Value = 60;
                 _prefs.RenewalIntervalDays = (int)this.RenewalIntervalDays.Value;
 
@@ -98,6 +121,28 @@ namespace Certify.UI.Controls
                 if (this.RenewalMaxRequests.Value == null) this.RenewalMaxRequests.Value = 0;
                 if (this.RenewalMaxRequests.Value > 100) this.RenewalMaxRequests.Value = 100;
                 _prefs.MaxRenewalRequests = (int)this.RenewalMaxRequests.Value;
+
+                // cert cleanup mode
+                if (this.CertCleanup_None.IsChecked == true)
+                {
+                    _prefs.CertificateCleanupMode = Models.CertificateCleanupMode.None;
+                    _prefs.EnableCertificateCleanup = false;
+                }
+                else if (this.CertCleanup_AfterExpiry.IsChecked == true)
+                {
+                    _prefs.CertificateCleanupMode = Models.CertificateCleanupMode.AfterExpiry;
+                    _prefs.EnableCertificateCleanup = true;
+                }
+                else if (this.CertCleanup_AfterRenewal.IsChecked == true)
+                {
+                    _prefs.CertificateCleanupMode = Models.CertificateCleanupMode.AfterRenewal;
+                    _prefs.EnableCertificateCleanup = true;
+                } else if (this.CertCleanup_FullCleanup.IsChecked == true)
+                {
+                    _prefs.CertificateCleanupMode = Models.CertificateCleanupMode.FullCleanup;
+                    _prefs.EnableCertificateCleanup = true;
+                }
+
                 Save.IsEnabled = true;
             }
         }
@@ -166,7 +211,7 @@ namespace Certify.UI.Controls
                 if (MessageBox.Show("Are you sure you wish to delete this stored credential?", "Confirm Delete", MessageBoxButton.YesNoCancel) == MessageBoxResult.Yes)
                 {
                     //confirm item not used then delete
-                    var deleted = await MainViewModel.DeleteCredential(_selectedStoredCredential.StorageKey);
+                    var deleted = await MainViewModel.DeleteCredential(_selectedStoredCredential?.StorageKey);
                     if (!deleted)
                     {
                         MessageBox.Show("This stored credential could not be removed. It may still be in use by a managed site.");

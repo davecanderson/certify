@@ -1,7 +1,8 @@
-using Certify.Locales;
+﻿using Certify.Locales;
 using Certify.Management;
 using Certify.Models;
 using Certify.Models.Config;
+using Certify.Shared.Utils;
 using Microsoft.Win32;
 using System;
 using System.Collections.Generic;
@@ -44,19 +45,6 @@ namespace Certify.UI.Controls.ManagedCertificate
                 }
             }
             catch (Exception) { }
-        }
-
-        private void DirectoryBrowse_Click(object sender, EventArgs e)
-        {
-            var config = ItemViewModel.SelectedItem.RequestConfig;
-            var dialog = new WinForms.FolderBrowserDialog()
-            {
-                SelectedPath = config.WebsiteRootPath
-            };
-            if (dialog.ShowDialog() == WinForms.DialogResult.OK)
-            {
-                config.WebsiteRootPath = dialog.SelectedPath;
-            }
         }
 
         private void FileBrowse_Click(object sender, EventArgs e)

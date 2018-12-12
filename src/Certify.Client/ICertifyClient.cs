@@ -116,11 +116,13 @@ namespace Certify.Client
 
         Task<CertificateRequestResult> ReapplyCertificateBindings(string managedItemId, bool isPreviewOnly);
 
-        Task<CertificateRequestResult> BeginCertificateRequest(string managedItemId);
+        Task<CertificateRequestResult> BeginCertificateRequest(string managedItemId, bool resumePaused);
 
         Task<RequestProgressState> CheckCertificateRequest(string managedItemId);
 
         Task<List<StatusMessage>> TestChallengeConfiguration(ManagedCertificate site);
+
+        Task<List<Models.Providers.DnsZone>> GetDnsProviderZones(string providerTypeId, string credentialsId);
 
         Task<List<ActionStep>> PreviewActions(ManagedCertificate site);
 

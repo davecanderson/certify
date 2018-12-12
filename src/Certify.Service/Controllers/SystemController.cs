@@ -20,7 +20,7 @@ namespace Certify.Service
         {
             DebugLog();
 
-            return new Management.Util().GetAppVersion().ToString();
+            return Management.Util.GetAppVersion().ToString();
         }
 
         [HttpGet, Route("updatecheck")]
@@ -29,6 +29,15 @@ namespace Certify.Service
             DebugLog();
 
             return await new Management.Util().CheckForUpdates();
+        }
+
+        [HttpGet, Route("maintenance")]
+        public async Task<string> PerformMaintenanceTasks()
+        {
+            DebugLog();
+
+            await _certifyManager.PerformCertificateCleanup();
+            return "OK";
         }
     }
 }

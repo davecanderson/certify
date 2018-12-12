@@ -5,6 +5,7 @@ using System.Windows;
 using System.Windows.Controls;
 using Certify.Locales;
 using Certify.Models;
+using Certify.Shared.Utils;
 using MahApps.Metro.Controls;
 
 namespace Certify.UI.Controls.ManagedCertificate
@@ -33,7 +34,9 @@ namespace Certify.UI.Controls.ManagedCertificate
                 this.SettingsTab.SelectedIndex = 0;
 
                 // show status tab for existing managed certs
-                if (ItemViewModel.SelectedItem?.Id != null)
+                bool showStatus = ItemViewModel.SelectedItem?.Id != null && ItemViewModel.SelectedItem.DateLastRenewalAttempt != null;
+
+                if (showStatus)
                 {
                     this.TabStatusInfo.Visibility = Visibility.Visible;
                     this.SettingsTab.SelectedItem = this.TabStatusInfo;
@@ -58,6 +61,8 @@ namespace Certify.UI.Controls.ManagedCertificate
                 MessageBox.Show(SR.ManagedCertificateSettings_SelectWebsiteOrCert, SR.SaveError, MessageBoxButton.OK, MessageBoxImage.Error);
                 return false;
             }*/
+
+            if (item.RequestConfig.Challenges == null) item.RequestConfig.Challenges = new System.Collections.ObjectModel.ObservableCollection<CertRequestChallengeConfig>();
 
             if (item.Id == null && item.RequestConfig.Challenges.Any(c => c.ChallengeType == SupportedChallengeTypes.CHALLENGE_TYPE_SNI))
             {
@@ -102,24 +107,15 @@ namespace Certify.UI.Controls.ManagedCertificate
                 item.Name = ItemViewModel.PrimarySubjectDomain.Domain;
             }
 
-            // certificates cannot include requests for 'localhost'
-            if (ItemViewModel.SelectedItem.DomainOptions.Any(d => d.IsSelected && d.Domain.StartsWith("*."))
-               &&
-                item.RequestConfig.Challenges.Any(c => c.ChallengeType == SupportedChallengeTypes.CHALLENGE_TYPE_HTTP)
-               )
-            {
-                // if we still can't decide on the primary domain ask user to define it
-                MessageBox.Show("Wildcard domains cannot use http-01 validation for domain authorization. Use dns-01 instead.", SR.SaveError, MessageBoxButton.OK, MessageBoxImage.Error);
-                return false;
-            }
-
-            // certificates cannot request wildcards and use http validation (dns only)
-            if (ItemViewModel.SelectedItem.DomainOptions.Any(d => d.IsSelected && d.Domain.StartsWith("*."))
+        
+            // certificates cannot request wildcards unless they also use DNS validation
+            if (
+                item.DomainOptions.Any(d => d.IsSelected && d.Domain.StartsWith("*."))
                 &&
-                 item.RequestConfig.Challenges.Any(c => c.ChallengeType == SupportedChallengeTypes.CHALLENGE_TYPE_HTTP)
+                !item.RequestConfig.Challenges.Any(c => c.ChallengeType == SupportedChallengeTypes.CHALLENGE_TYPE_DNS)
                 )
             {
-                // if we still can't decide on the primary domain ask user to define it
+                
                 MessageBox.Show("Wildcard domains cannot use http-01 validation for domain authorization. Use dns-01 instead.", SR.SaveError, MessageBoxButton.OK, MessageBoxImage.Error);
                 return false;
             }
@@ -129,6 +125,35 @@ namespace Certify.UI.Controls.ManagedCertificate
             {
                 MessageBox.Show("The tls-sni-01 challenge type is no longer available. You need to switch to either http-01 or dns-01.", SR.SaveError, MessageBoxButton.OK, MessageBoxImage.Error);
                 return false;
+            }
+
+            if (item.RequestConfig.Challenges.Any(c => c.ChallengeType == SupportedChallengeTypes.CHALLENGE_TYPE_DNS && c.ChallengeProvider == null))
+            {
+                MessageBox.Show("The dns-01 challenge type requires a DNS Update Method selection.", SR.SaveError, MessageBoxButton.OK, MessageBoxImage.Error);
+                return false;
+            }
+
+            if (item.RequestConfig.Challenges.Count(c=>string.IsNullOrEmpty(c.DomainMatch))>1)
+            {
+                MessageBox.Show("Only one authorization configuration can be used match any domain (domain match blank). Specify domain(s) to match or remove additional configuration. ", SR.SaveError, MessageBoxButton.OK, MessageBoxImage.Error);
+                return false;
+            }
+
+            // validate settings for authorizations non-optional parmaeters
+            foreach (var c in item.RequestConfig.Challenges)
+            {
+                if (c.Parameters != null && c.Parameters.Any())
+                {
+                    //validate parmeters
+                    foreach (var p in c.Parameters)
+                    {
+                        if (p.IsRequired && String.IsNullOrEmpty(p.Value))
+                        {
+                            MessageBox.Show($"Challenge configuration parameter required: {p.Name}", SR.SaveError, MessageBoxButton.OK, MessageBoxImage.Error);
+                            return false;
+                        }
+                    }
+                }
             }
 
             if (item.RequestConfig.PerformAutomatedCertBinding)
@@ -264,16 +289,20 @@ namespace Certify.UI.Controls.ManagedCertificate
                 return;
             }
 
-            ItemViewModel.IsTestInProgress = true;
+            // validate and save before test
+            if (!await ValidateAndSave(ItemViewModel.SelectedItem)) return;
+           
+           
 
             var challengeConfig = ItemViewModel.SelectedItem.GetChallengeConfig(null);
 
-            if (challengeConfig.ChallengeType == SupportedChallengeTypes.CHALLENGE_TYPE_HTTP && !AppViewModel.IsIISAvailable)
+            if (challengeConfig.ChallengeType == SupportedChallengeTypes.CHALLENGE_TYPE_HTTP && !String.IsNullOrEmpty(ItemViewModel.SelectedItem.ServerSiteId) && !AppViewModel.IsIISAvailable)
             {
                 MessageBox.Show(SR.ManagedCertificateSettings_CannotChallengeWithoutIIS, SR.ChallengeError, MessageBoxButton.OK, MessageBoxImage.Error);
             }
             else if (challengeConfig.ChallengeType != null)
             {
+                ItemViewModel.IsTestInProgress = true;
                 Button_TestChallenge.IsEnabled = false;
 
                 try
@@ -310,10 +339,6 @@ namespace Certify.UI.Controls.ManagedCertificate
                 //TODO: just use viewmodel to determine if test button should be enabled
                 Button_TestChallenge.IsEnabled = true;
                 ItemViewModel.IsTestInProgress = false;
-
-                // show status tab
-
-                this.SettingsTab.SelectedItem = this.TabStatusInfo;
             }
         }
 

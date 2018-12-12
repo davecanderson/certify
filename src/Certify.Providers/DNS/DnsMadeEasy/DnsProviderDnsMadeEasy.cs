@@ -12,10 +12,12 @@ using Newtonsoft.Json;
 namespace Certify.Providers.DNS.DnsMadeEasy
 {
     /// <summary>
-    /// API calls based on https://api-docs.dnsmadeeasy.com/ 
+    /// API calls based on https://api-docs.dnsmadeeasy.com/
     /// </summary>
     public class DnsProviderDnsMadeEasy : DnsProviderBase, IDnsProvider, IDisposable
     {
+        private ILog _log;
+
         private class DnsQueryResults
         {
             public int TotalRecords { get; set; }
@@ -63,7 +65,8 @@ namespace Certify.Providers.DNS.DnsMadeEasy
                     PropagationDelaySeconds = 60,
                     ProviderParameters = new List<ProviderParameter>{
                         new ProviderParameter{Key="apikey", Name="API Key", IsRequired=true },
-                        new ProviderParameter{Key="apisecret", Name="API Secret", IsRequired=true }
+                        new ProviderParameter{Key="apisecret", Name="API Secret", IsRequired=true },
+                        new ProviderParameter{ Key="zoneid",Name="DNS Zone Id", IsRequired=true, IsPassword=false, IsCredential=false }
                     },
                     ChallengeType = Models.SupportedChallengeTypes.CHALLENGE_TYPE_DNS,
                     Config = "Provider=Certify.Providers.DNS.DnsMadeEasy",
@@ -171,14 +174,55 @@ namespace Certify.Providers.DNS.DnsMadeEasy
             }
         }
 
-        public Task<ActionResult> DeleteRecord(DnsRecord request)
+        public async Task<ActionResult> DeleteRecord(DnsRecord request)
         {
             // https://api-docs.dnsmadeeasy.com/ determine record id, if it exists
 
             // delete based on zoneid, recordId
 
             //https://api.dnsmadeeasy.com/V2.0/dns/managed/1119443/records/66814826
-            throw new System.NotImplementedException();
+
+            DnsRecord domainInfo = null;
+
+            try
+            {
+                domainInfo = await DetermineZoneDomainRoot(request.RecordName, request.ZoneId);
+
+                if (string.IsNullOrEmpty(domainInfo.RootDomain))
+                {
+                    return new ActionResult { IsSuccess = false, Message = "Failed to determine root domain in zone." };
+                }
+            }
+            catch (Exception exp)
+            {
+                return new ActionResult { IsSuccess = false, Message = $"[{ProviderTitle}] Failed to create record: {exp.Message}" };
+            }
+
+            var recordName = NormaliseRecordName(domainInfo, request.RecordName);
+
+            var existingRecords = await GetDnsRecords(request.ZoneId);
+
+            foreach (var r in existingRecords)
+            {
+                if (r.RecordName == recordName && r.RecordType == request.RecordType)
+                {
+                    //delete existing record
+                    string url = $"{_apiUrl}dns/managed/{request.ZoneId}/records/{r.RecordId}";
+                    var apiRequest = CreateRequest(HttpMethod.Delete, url, DateTimeOffset.Now);
+                    var result = await _httpClient.SendAsync(apiRequest);
+
+                    if (!result.IsSuccessStatusCode)
+                    {
+                        return new ActionResult
+                        {
+                            IsSuccess = false,
+                            Message = $"Could not delete dns record {recordName} from zone {request.ZoneId}. Result: {result.StatusCode}"
+                        };
+                    }
+                }
+            }
+
+            return new ActionResult { IsSuccess = true, Message = $"Dns record deleted: {recordName}" };
         }
 
         public async Task<List<DnsRecord>> GetDnsRecords(string zoneId)
@@ -231,8 +275,9 @@ namespace Certify.Providers.DNS.DnsMadeEasy
             }
         }
 
-        public async Task<bool> InitProvider()
+        public async Task<bool> InitProvider(ILog log = null)
         {
+            _log = log;
             return await Task.FromResult(true);
         }
 

@@ -61,13 +61,15 @@ namespace Certify.Providers.DNS.Cloudflare
     }
 
     /// <summary>
-    /// Helper class to interface with the CloudFlare API endpoint. 
+    /// Helper class to interface with the CloudFlare API endpoint.
     /// </summary>
-    /// <remarks>
+    /// <remarks> 
     /// See <see cref="https://api.cloudflare.com/#getting-started-endpoints" /> for more details.
     /// </remarks>
     public class DnsProviderCloudflare : IDnsProvider
     {
+        private ILog _log;
+
         private HttpClient _client = new HttpClient();
 
         private readonly string _authKey;
@@ -105,7 +107,8 @@ namespace Certify.Providers.DNS.Cloudflare
                     PropagationDelaySeconds = 60,
                     ProviderParameters = new List<ProviderParameter>{
                         new ProviderParameter{Key="emailaddress", Name="Email Address", IsRequired=true },
-                        new ProviderParameter{Key="authkey", Name="Auth Key", IsRequired=true }
+                        new ProviderParameter{Key="authkey", Name="Auth Key", IsRequired=true },
+                        new ProviderParameter{ Key="zoneid",Name="DNS Zone Id", IsRequired=true, IsPassword=false, IsCredential=false }
                      },
                     ChallengeType = Models.SupportedChallengeTypes.CHALLENGE_TYPE_DNS,
                     Config = "Provider=Certify.Providers.DNS.Cloudflare",
@@ -129,7 +132,7 @@ namespace Certify.Providers.DNS.Cloudflare
 
                 if (zones != null && zones.Any())
                 {
-                    return new ActionResult { IsSuccess = true, Message = "Test Completed OK." };
+                    return new ActionResult { IsSuccess = true, Message = "Dns API Test Completed OK." };
                 }
                 else
                 {
@@ -138,7 +141,7 @@ namespace Certify.Providers.DNS.Cloudflare
             }
             catch (Exception exp)
             {
-                return new ActionResult { IsSuccess = true, Message = $"Test Failed: {exp.Message}" };
+                return new ActionResult { IsSuccess = true, Message = $"Dns API Test Failed: {exp.Message}" };
             }
         }
 
@@ -217,7 +220,7 @@ namespace Certify.Providers.DNS.Cloudflare
                 return new ActionResult
                 {
                     IsSuccess = true,
-                    Message = "DNS record added."
+                    Message = $"DNS record added: {name}"
                 };
             }
         }
@@ -249,27 +252,17 @@ namespace Certify.Providers.DNS.Cloudflare
             }
             else
             {
-                return new ActionResult { IsSuccess = true, Message = "DNS record updated" };
+                return new ActionResult { IsSuccess = true, Message = $"DNS record updated: {record.Name}" };
             }
         }
 
         public async Task<ActionResult> CreateRecord(DnsRecord request)
         {
-            //check if record already exists
-
             try
             {
                 var records = await GetDnsRecords(request.ZoneId);
-                var record = records.FirstOrDefault(x => x.Name == request.RecordName);
 
-                if (record != null)
-                {
-                    return await UpdateDnsRecord(request.ZoneId, record, request.RecordValue);
-                }
-                else
-                {
-                    return await AddDnsRecord(request.ZoneId, request.RecordName, request.RecordValue);
-                }
+                return await AddDnsRecord(request.ZoneId, request.RecordName, request.RecordValue);
             }
             catch (Exception exp)
             {
@@ -280,29 +273,31 @@ namespace Certify.Providers.DNS.Cloudflare
         public async Task<ActionResult> DeleteRecord(DnsRecord request)
         {
             var records = await GetDnsRecords(request.ZoneId);
-            var record = records.FirstOrDefault(x => x.Name == request.RecordName);
+            var recordsToDelete = records.Where(x => x.Name == request.RecordName);
 
-            if (record == null)
+            if (!recordsToDelete.Any())
             {
                 return new ActionResult { IsSuccess = true, Message = "DNS record does not exist, nothing to delete." };
             }
 
-            var req = CreateRequest(HttpMethod.Delete, string.Format(_deleteRecordUri, request.ZoneId, record.Id));
+            var itemError = "";
 
-            var result = await _client.SendAsync(req);
+            // when deleting a TXT record with multiple values several records will be returned but
+            // only the first delete will succeed (removing all values) for this reason we return a
+            // success state even if the delete failed
+            foreach (var r in recordsToDelete)
+            {
+                var req = CreateRequest(HttpMethod.Delete, string.Format(_deleteRecordUri, request.ZoneId, r.Id));
 
-            if (result.IsSuccessStatusCode)
-            {
-                return new ActionResult { IsSuccess = true, Message = "DNS record deleted." };
-            }
-            else
-            {
-                return new ActionResult
+                var result = await _client.SendAsync(req);
+                if (!result.IsSuccessStatusCode)
                 {
-                    IsSuccess = false,
-                    Message = $"Could not delete record {request.RecordName}. Result: {result.StatusCode} - {await result.Content.ReadAsStringAsync()}"
-                };
+                    itemError += " " + await result.Content.ReadAsStringAsync();
+                    return new ActionResult { IsSuccess = false, Message = $"DNS record delete failed: {request.RecordName}" };
+                }
             }
+
+            return new ActionResult { IsSuccess = true, Message = $"DNS record deleted: {request.RecordName}" };
         }
 
         public async Task<List<DnsZone>> GetZones()
@@ -345,8 +340,9 @@ namespace Certify.Providers.DNS.Cloudflare
             return zones;
         }
 
-        public async Task<bool> InitProvider()
+        public async Task<bool> InitProvider(ILog log = null)
         {
+            _log = log;
             return await Task.FromResult(true);
         }
     }

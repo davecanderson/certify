@@ -11,7 +11,7 @@ using Microsoft.Win32;
 namespace Certify.Management.Servers
 {
     /// <summary>
-    /// Model to work with IIS site details. 
+    /// Model to work with IIS site details.
     /// </summary>
     public class ServerProviderIIS : ICertifiedServer
     {
@@ -83,28 +83,41 @@ namespace Certify.Management.Servers
         public async Task<List<ActionStep>> RunConfigurationDiagnostics(string siteId)
         {
             List<ActionStep> configChecks = new List<ActionStep>();
-            using (var serverManager = await GetDefaultServerManager())
-            {
-                var config = serverManager.GetApplicationHostConfiguration();
 
-                if ((bool?)serverManager.ApplicationPoolDefaults["enableConfigurationOverride"] == false)
+            try
+            {
+                using (var serverManager = await GetDefaultServerManager())
                 {
-                    configChecks.Add(new ActionStep
+                    var config = serverManager.GetApplicationHostConfiguration();
+
+                    if ((bool?)serverManager.ApplicationPoolDefaults["enableConfigurationOverride"] == false)
                     {
-                        HasWarning = true,
-                        Title = "Application Pool: Configuration Override Disabled",
-                        Description = "Configuration warning: enableConfigurationOverride in system.applicationHost / applicationPools is set to false. This may prevent auto configuration from clearing or rearranging static file handler mappings."
-                    });
+                        configChecks.Add(new ActionStep
+                        {
+                            HasWarning = true,
+                            Title = "Application Pool: Configuration Override Disabled",
+                            Description = "Configuration warning: enableConfigurationOverride in system.applicationHost / applicationPools is set to false. This may prevent auto configuration from clearing or rearranging static file handler mappings."
+                        });
+                    }
+                    else
+                    {
+                        configChecks.Add(new ActionStep
+                        {
+                            HasError = false,
+                            Title = "Application Pool: Configuration Override Enabled",
+                            Description = "Application Pool: Configuration Override Enabled"
+                        });
+                    }
                 }
-                else
+            }
+            catch (Exception)
+            {
+                configChecks.Add(new ActionStep
                 {
-                    configChecks.Add(new ActionStep
-                    {
-                        HasError = false,
-                        Title = "Application Pool: Configuration Override Enabled",
-                        Description = "Application Pool: Configuration Override Enabled"
-                    });
-                }
+                    HasWarning = true,
+                    Title = "IIS Administration API not available",
+                    Description = "Querying the state of IIS failed. This is usually because IIS is not installed or is not fully configured."
+                });
             }
             return configChecks;
         }
@@ -115,16 +128,22 @@ namespace Certify.Management.Servers
             try
             {
                 srv = new ServerManager();
+
+                // checking sites collection will throw a com exception if IIS is not installed
+                if (srv.Sites.Count < 0) throw new Exception("IIS is not installed");
             }
-            catch (System.Runtime.InteropServices.COMException)
+            catch (Exception)
             {
+                srv = null;
                 try
                 {
                     srv = new ServerManager(@"C:\Windows\System32\inetsrv\config\applicationHost.config");
+                    if (srv.Sites.Count < 0) throw new Exception("IIS is not installed");
                 }
                 catch (Exception)
                 {
                     // IIS is probably not installed
+                    srv = null;
                 }
             }
 
@@ -182,10 +201,10 @@ namespace Certify.Management.Servers
         }
 
         /// <summary>
-        /// Return list of sites (non-specific bindings) 
+        /// Return list of sites (non-specific bindings)
         /// </summary>
-        /// <param name="includeOnlyStartedSites"></param>
-        /// <returns></returns>
+        /// <param name="includeOnlyStartedSites">  </param>
+        /// <returns>  </returns>
         public async Task<List<BindingInfo>> GetPrimarySites(bool includeOnlyStartedSites)
         {
             var result = new List<BindingInfo>();
@@ -246,90 +265,186 @@ namespace Certify.Management.Servers
             }
         }
 
+        /// <summary>
+        /// Add or Update domain binding as required (http or https)
+        /// </summary>
+        /// <param name="bindingSpec">  </param>
+        /// <param name="addNew">  </param>
+        /// <returns>  </returns>
+
         public async Task<ActionStep> AddOrUpdateSiteBinding(BindingInfo bindingSpec, bool addNew)
         {
+            if (string.IsNullOrEmpty(bindingSpec.SiteId)) throw new Exception("IIS.AddOrUpdateSiteBinding: SiteId not specified");
+
             var result = new ActionStep { };
-
-            using (var iisManager = await GetDefaultServerManager())
+            int remainingAttempts = 3;
+            bool isCompleted = false;
+            while (!isCompleted && remainingAttempts > 0)
             {
-                var isSNISupported = await IsSNISupported();
-
-                lock (_iisAPILock)
+                try
                 {
-                    var site = iisManager.Sites.FirstOrDefault(s => s.Id == long.Parse(bindingSpec.SiteId));
-
-                    if (site != null)
+                    using (var iisManager = await GetDefaultServerManager())
                     {
-                        if (addNew)
+                        var isSNISupported = await IsSNISupported();
+
+                        lock (_iisAPILock)
                         {
-                            var binding = site.Bindings.CreateElement();
+                            var site = iisManager.Sites.FirstOrDefault(s => s.Id == long.Parse(bindingSpec.SiteId));
 
-                            var bindingSpecString = $"{(!string.IsNullOrEmpty(bindingSpec.IP) ? bindingSpec.IP : "*")}:{bindingSpec.Port}:{bindingSpec.Host}";
-
-                            // Set binding values
-                            binding.Protocol = "https";
-                            binding.BindingInformation = bindingSpecString;
-                            binding.CertificateStoreName = bindingSpec.CertificateStore;
-                            binding.CertificateHash = bindingSpec.CertificateHashBytes;
-
-                            if (isSNISupported)
+                            if (site != null)
                             {
-                                if (!string.IsNullOrEmpty(bindingSpec.Host) && bindingSpec.IsSNIEnabled)
-                                {
-                                    try
-                                    {
-                                        binding["sslFlags"] = 1; // enable SNI
-                                    }
-                                    catch (Exception)
-                                    {
-                                        //failed to set requested SNI flag
-                                        //TODO: log
-                                        // action.Description += $" Failed to set SNI attribute";
+                                var binding = site.Bindings.CreateElement();
+                                var bindingSpecString = "";
+                                var bindingError = false;
+                                List<ConfigurationAttribute> existingBindingAttributes = null;
 
-                                        return new ActionStep { HasError = true, Description = $"Failed to set SNI flag on IIS Binding: {bindingSpec}" };
+                                if (addNew)
+                                {
+                                    bindingSpecString = $"{(!string.IsNullOrEmpty(bindingSpec.IP) ? bindingSpec.IP : "*")}:{bindingSpec.Port}:{bindingSpec.Host}";
+                                }
+                                else
+                                {
+                                    var existingBinding = site.Bindings
+                                            .FirstOrDefault(b =>
+                                                    b.Host?.ToLower() == bindingSpec.Host?.ToLower()
+                                                    && b.Protocol.ToLower() == bindingSpec.Protocol.ToLower()
+                                                );
+
+                                    if (existingBinding != null)
+                                    {
+                                        // copy previous binding information
+                                        bindingSpecString = existingBinding.BindingInformation;
+                                        existingBindingAttributes = existingBinding.Attributes.ToList();
+
+                                        // remove old binding (including all shared SSL bindings)
+
+                                        // if removing a binding with an IP:Port association and
+                                        // there are other non-sni bindings using the same cert this
+                                        // will also invalidate those bindings
+                                        // TODO: pre-validate shared bindings
+                                        site.Bindings.Remove(existingBinding, removeConfigOnly: true);
+
+                                        result = new ActionStep { HasWarning = false, Description = $"Existing binding removed : {bindingSpec}" };
+                                    }
+                                    else
+                                    {
+                                        result = new ActionStep { HasError = true, Description = $"Existing binding not found : {bindingSpec}" };
+                                        bindingError = true;
                                     }
                                 }
-                            }
-                            else
-                            {
-                                if (bindingSpec.IsSNIEnabled && !isSNISupported)
+
+                                // If there are no errors, proceed with adding new binding
+                                if (!bindingError)
                                 {
-                                    result = new ActionStep { HasWarning = true, Description = $"SNI requested on on IIS Binding but is not supported by this version of IIS. Duplicate certificate bindings can occur unless each certificate is bound to a distinct IP address : {bindingSpec}" };
+                                    // Set binding values
+                                    if (bindingSpec.IsHTTPS)
+                                    {
+                                        binding.Protocol = "https";
+                                        binding.BindingInformation = bindingSpecString;
+                                        binding.CertificateStoreName = bindingSpec.CertificateStore;
+                                        binding.CertificateHash = bindingSpec.CertificateHashBytes;
+                                    }
+                                    else
+                                    {
+                                        binding.Protocol = bindingSpec.Protocol ?? "http";
+                                        binding.BindingInformation = bindingSpecString;
+                                    }
+
+                                    if (existingBindingAttributes != null)
+                                    {
+                                        //clone existing binding attributes
+
+                                        var skippedAttributes = new[] {
+                                    "protocol",
+                                    "bindingInformation",
+                                    "certificateStoreName",
+                                    "certificateHash"
+                                };
+
+                                        foreach (var a in existingBindingAttributes)
+                                        {
+                                            try
+                                            {
+                                                if (!skippedAttributes.Contains(a.Name) && a.Value != null)
+                                                {
+                                                    binding.SetAttributeValue(a.Name, a.Value);
+                                                }
+                                            }
+                                            catch
+                                            {
+                                                return new ActionStep { HasError = true, Description = $"Failed to set binding attribute on updated IIS Binding: {a.Name}" };
+                                            }
+                                        }
+                                    }
+                                    if (bindingSpec.IsHTTPS)
+                                    {
+                                        if (isSNISupported)
+                                        {
+                                            if (!string.IsNullOrEmpty(bindingSpec.Host) && bindingSpec.IsSNIEnabled)
+                                            {
+                                                try
+                                                {
+                                                    binding["sslFlags"] = 1; // enable SNI
+                                                }
+                                                catch (Exception)
+                                                {
+                                                    //failed to set requested SNI flag
+                                                    //TODO: log
+
+                                                    return new ActionStep { HasError = true, Description = $"Failed to set SNI flag on IIS Binding: {bindingSpec}" };
+                                                }
+                                            }
+                                        }
+                                        else
+                                        {
+                                            if (bindingSpec.IsSNIEnabled && !isSNISupported)
+                                            {
+                                                result = new ActionStep { HasWarning = true, Description = $"SNI requested on on IIS Binding but is not supported by this version of IIS. Duplicate certificate bindings can occur unless each certificate is bound to a distinct IP address : {bindingSpec}" };
+                                            }
+                                        }
+                                    }
+
+                                    // Add the binding to the site
+                                    site.Bindings.Add(binding);
+
+                                    result = new ActionStep { HasWarning = false, Description = $"New binding added : {bindingSpec}" };
                                 }
                             }
 
-                            // Add the binding to the site
-                            site.Bindings.Add(binding);
-                        }
-                        else
-                        {
-                            var existingBinding = site.Bindings.FirstOrDefault(b =>
-                                            b.Host == bindingSpec.Host
-                                            && b.Protocol == bindingSpec.Protocol
-                                        );
-
-                            if (existingBinding != null)
-                            {
-                                existingBinding.CertificateHash = bindingSpec.CertificateHashBytes;
-                                existingBinding.CertificateStoreName = bindingSpec.CertificateStore;
-
-                                result = new ActionStep { HasWarning = false, Description = $"Existing binding updated : {bindingSpec}" };
-                            }
-                            else
-                            {
-                                result = new ActionStep { HasError = true, Description = $"Existing binding not found : {bindingSpec}" };
-                            }
+                            iisManager.CommitChanges();
                         }
                     }
+                    isCompleted = true;
+                }
+                catch (Exception exp)
+                {
+                    System.Diagnostics.Debug.WriteLine(exp.ToString());
+                    // failed to commit binding, possible exception due to config still being written
+                    // from another operation
+                    isCompleted = false;
+                    remainingAttempts--;
 
-                    iisManager.CommitChanges();
+                    if (remainingAttempts == 0 && !isCompleted)
+                    {
+                        // failed to create this binding, possible due to settings serialisation conflict
+                        throw exp;
+                    }
+                    else
+                    {
+                        await Task.Delay(2500); // pause to give IIS config time to write to disk before attempting more writes
+                    }
                 }
             }
-            await Task.Delay(250); // pause to give IIS config time to write to disk before attempting more writes
-
             return result;
         }
 
+        /// <summary>
+        /// Simple binding creation for integrations test only
+        /// </summary>
+        /// <param name="siteId">  </param>
+        /// <param name="domains">  </param>
+        /// <param name="port">  </param>
+        /// <returns>  </returns>
         public async Task AddSiteBindings(string siteId, List<string> domains, int port = 80)
         {
             using (var iisManager = await GetDefaultServerManager())
@@ -381,6 +496,28 @@ namespace Certify.Management.Servers
             return result.OrderBy(r => r.SiteName).ToList();
         }
 
+        private string HashBytesToThumprint(byte[] bytes)
+        {
+            // inspired by:
+            // dotnet core System.Security.Cryptography.X509Certificates/src/Internal/Cryptography/Helpers.cs
+            // CertificateHash is stored as 2 nibbles (4-bits) per byte, so convert to bytes > hex
+            string output = "";
+            foreach (byte b in bytes)
+            {
+                output += ((byte)(b >> 4)).ToString("X");
+                output += ((byte)(b & 0xF)).ToString("X");
+            }
+            return output;
+        }
+
+        private static char NibbleToHex(byte b)
+        {           
+            return (char)(b >= 0 && b <= 9 ?
+                '0' + b :
+                'A' + (b - 10));
+        }
+
+
         private BindingInfo GetSiteBinding(Site site, Binding binding)
         {
             var siteInfo = Map(site);
@@ -390,12 +527,14 @@ namespace Certify.Management.Servers
                 SiteId = siteInfo.Id,
                 SiteName = siteInfo.Name,
                 PhysicalPath = siteInfo.Path,
-                Host = binding.Host,
+                Host = binding.Host.ToLower(),
                 IP = binding.EndPoint?.Address?.ToString(),
                 Port = binding.EndPoint?.Port ?? 0,
                 IsHTTPS = binding.Protocol.ToLower() == "https",
-                Protocol = binding.Protocol,
-                HasCertificate = (binding.CertificateHash != null)
+                Protocol = binding.Protocol.ToLower(),
+                HasCertificate = (binding.CertificateHash != null),
+                CertificateHash = binding.CertificateHash != null ? HashBytesToThumprint(binding.CertificateHash): null,
+                CertificateHashBytes = binding.CertificateHash
             };
         }
 
@@ -441,12 +580,12 @@ namespace Certify.Management.Servers
         }
 
         /// <summary>
-        /// Create a new IIS site with the given default host name, path, app pool 
+        /// Create a new IIS site with the given default host name, path, app pool
         /// </summary>
-        /// <param name="siteName"></param>
-        /// <param name="hostname"></param>
-        /// <param name="phyPath"></param>
-        /// <param name="appPoolName"></param>
+        /// <param name="siteName">  </param>
+        /// <param name="hostname">  </param>
+        /// <param name="phyPath">  </param>
+        /// <param name="appPoolName">  </param>
         public async Task<Site> CreateSite(string siteName, string hostname, string phyPath, string appPoolName, string protocol = "http", string ipAddress = "*", int? port = 80)
         {
             Site result = null;
@@ -480,10 +619,10 @@ namespace Certify.Management.Servers
         }
 
         /// <summary>
-        /// Check if site with given site name exists 
+        /// Check if site with given site name exists
         /// </summary>
-        /// <param name="siteName"></param>
-        /// <returns></returns>
+        /// <param name="siteName">  </param>
+        /// <returns>  </returns>
         public async Task<bool> SiteExists(string siteName)
         {
             using (var iisManager = await GetDefaultServerManager())
@@ -538,8 +677,15 @@ namespace Certify.Management.Servers
         {
             using (var iisManager = await GetDefaultServerManager())
             {
-                Site siteDetails = iisManager.Sites.FirstOrDefault(s => s.Id.ToString() == id);
-                return Map(siteDetails);
+                if (iisManager != null)
+                {
+                    Site siteDetails = iisManager.Sites.FirstOrDefault(s => s.Id.ToString() == id);
+                    return Map(siteDetails);
+                }
+                else
+                {
+                    return null;
+                }
             }
         }
 
@@ -570,7 +716,7 @@ namespace Certify.Management.Servers
         }
 
         /// <summary>
-        /// Finds the IIS <see cref="Site" /> corresponding to a <see cref="ManagedCertificate" />. 
+        /// Finds the IIS <see cref="Site" /> corresponding to a <see cref="ManagedCertificate" />.
         /// </summary>
         /// <param name="managedCertificate"> Configured site. </param>
         /// <returns> The matching IIS Site if found, otherwise null. </returns>
@@ -588,9 +734,7 @@ namespace Certify.Management.Servers
 
             if (site == null)
             {
-                site = Map(
-                    await GetIISSiteByDomain(managedCertificate.RequestConfig.PrimaryDomain)
-                    );
+                site = Map(await GetIISSiteByDomain(managedCertificate.RequestConfig.PrimaryDomain));
             }
 
             return site;
@@ -605,10 +749,10 @@ namespace Certify.Management.Servers
         }
 
         /// <summary>
-        /// removes the sites https binding for the dns host name specified 
+        /// removes the sites https binding for the dns host name specified
         /// </summary>
-        /// <param name="siteId"></param>
-        /// <param name="host"></param>
+        /// <param name="siteId">  </param>
+        /// <param name="host">  </param>
         public async Task RemoveHttpsBinding(string siteId, string host)
         {
             if (string.IsNullOrEmpty(siteId)) throw new Exception("RemoveHttpsBinding: No siteId for IIS Site");
@@ -625,7 +769,7 @@ namespace Certify.Management.Servers
 
                         var binding = site.Bindings.Where(b =>
                             b.Host == internationalHost &&
-                            b.Protocol == "https"
+                            b.Protocol.ToLower() == "https"
                         ).FirstOrDefault();
 
                         if (binding != null)

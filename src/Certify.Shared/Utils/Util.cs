@@ -16,25 +16,24 @@ namespace Certify.Management
 {
     public class Util
     {
-        public const string APPDATASUBFOLDER = "Certify";
 
         /// <summary>
-        /// check for problems which could affect app use 
+        /// check for problems which could affect app use
         /// </summary>
-        /// <returns></returns>
+        /// <returns>  </returns>
         public static Task<List<ActionResult>> PerformAppDiagnostics()
         {
             var results = new List<ActionResult>();
 
-            string tempPath = "";
-            string tempFolder = Path.GetTempPath();
+            var tempPath = "";
+            var tempFolder = Path.GetTempPath();
 
             // attempt to create a 1MB temp file, detect if it fails
             try
             {
                 tempPath = Path.GetTempFileName();
 
-                FileStream fs = new FileStream(tempPath, FileMode.Open);
+                var fs = new FileStream(tempPath, FileMode.Open);
                 fs.Seek(1024 * 1024, SeekOrigin.Begin);
                 fs.WriteByte(0);
                 fs.Close();
@@ -46,6 +45,30 @@ namespace Certify.Management
             {
                 results.Add(new ActionResult { IsSuccess = false, Message = $"Could not create a temp file ({tempPath}). Windows has a limit of 65535 files in the temp folder ({tempFolder}). Clear temp files  before proceeding. {exp.Message}" });
             }
+
+            // check free disk space
+            try
+            {
+                var cDrive = new DriveInfo("c");
+                if (cDrive.IsReady)
+                {
+                    var freeSpaceBytes = cDrive.AvailableFreeSpace;
+
+                    // Check disk has at least 128MB free
+                    if (freeSpaceBytes < (1024L * 1024 * 128))
+                    {
+                        results.Add(new ActionResult { IsSuccess = false, Message = $"Drive C: has less than 128MB of disk space free. The application may not run correctly." });
+                    }
+                    else
+                    {
+                        results.Add(new ActionResult { IsSuccess = true, Message = $"Drive C: has more than 128MB of disk space free." });
+                    }
+                }
+            }
+            catch (Exception)
+            {
+                results.Add(new ActionResult { IsSuccess = false, Message = $"Could not check how much disk space is left on drive C:" });
+            }
             return Task.FromResult(results);
         }
 
@@ -56,22 +79,7 @@ namespace Certify.Management
 
         public static string GetAppDataFolder(string subFolder = null)
         {
-            var parts = new List<string>()
-            {
-                Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
-                APPDATASUBFOLDER
-            };
-
-            if (subFolder != null) parts.Add(subFolder);
-
-            var path = Path.Combine(parts.ToArray());
-
-            if (!Directory.Exists(path))
-            {
-                Directory.CreateDirectory(path);
-            }
-
-            return path;
+            return SharedUtils.ServiceConfigManager.GetAppDataFolder(subFolder);
         }
 
         public TelemetryClient InitTelemetry()
@@ -90,10 +98,16 @@ namespace Certify.Management
             return tc;
         }
 
-        public Version GetAppVersion()
+        public static string GetUserAgent()
+        {
+            var versionName = "Certify/" + GetAppVersion().ToString();
+            return $"{versionName} (Windows; {Environment.OSVersion.ToString()}) ";
+        }
+
+        public static Version GetAppVersion()
         {
             // returns the version of Certify.Shared
-            System.Reflection.Assembly assembly = System.Reflection.Assembly.GetExecutingAssembly();
+            var assembly = System.Reflection.Assembly.GetExecutingAssembly();
 
             var v = assembly.GetName().Version;
             return v;
@@ -115,8 +129,10 @@ namespace Certify.Management
             //get app version
             try
             {
-                HttpClient client = new HttpClient();
-                var response = await client.GetAsync(ConfigResources.APIBaseURI + "update?version=" + appVersion);
+                var client = new HttpClient();
+                client.DefaultRequestHeaders.Add("User-Agent", Util.GetUserAgent());
+
+                var response = await client.GetAsync(Models.API.Config.APIBaseURI + "update?version=" + appVersion);
                 if (response.IsSuccessStatusCode)
                 {
                     string json = await response.Content.ReadAsStringAsync();
@@ -181,9 +197,9 @@ namespace Certify.Management
         }
 
         /// <summary>
-        /// Gets the certificate the file is signed with. 
+        /// Gets the certificate the file is signed with.
         /// </summary>
-        /// <param name="filename">
+        /// <param name="filename"> 
         /// The path of the signed file from which to create the X.509 certificate.
         /// </param>
         /// <returns> The certificate the file is signed with </returns>
@@ -222,7 +238,7 @@ namespace Certify.Management
             {
                 Console.WriteLine("Error {0} : {1}", e.GetType(), e.Message);
                 Console.WriteLine("Couldn't parse the certificate." +
-                                  "Be sure it is a X.509 certificate");
+                                  "Be sure it is an X.509 certificate");
                 return null;
             }
             return cert;
@@ -295,6 +311,7 @@ namespace Certify.Management
             if (result.IsNewerVersion)
             {
                 HttpClient client = new HttpClient();
+                client.DefaultRequestHeaders.Add("User-Agent", Util.GetUserAgent());
 
                 //https://github.com/dotnet/corefx/issues/6849
                 var tempFile = Path.Combine(new string[] { pathname, "CertifySSL_" + result.Version.ToString() + "_Setup.tmp" });
@@ -375,14 +392,14 @@ namespace Certify.Management
         }
 
         /// <summary>
-        /// From https://docs.microsoft.com/en-us/dotnet/framework/migration-guide/how-to-determine-which-versions-are-installed#net_d 
+        /// From https://docs.microsoft.com/en-us/dotnet/framework/migration-guide/how-to-determine-which-versions-are-installed#net_d
         /// </summary>
-        /// <returns></returns>
+        /// <returns>  </returns>
         public static string GetDotNetVersion()
         {
             const string subkey = @"SOFTWARE\Microsoft\NET Framework Setup\NDP\v4\Full\";
 
-            using (RegistryKey ndpKey = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Registry32).OpenSubKey(subkey))
+            using (var ndpKey = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Registry32).OpenSubKey(subkey))
             {
                 if (ndpKey != null && ndpKey.GetValue("Release") != null)
                 {

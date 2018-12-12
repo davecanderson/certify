@@ -79,7 +79,7 @@ namespace Certify.Management
 
             if (storedCredential.ProviderType.StartsWith("DNS"))
             {
-                var dnsProvider = await ChallengeProviders.GetDnsProvider(storedCredential.ProviderType, credentials);
+                var dnsProvider = await ChallengeProviders.GetDnsProvider(storedCredential.ProviderType, credentials, new Dictionary<string, string> { });
 
                 if (dnsProvider == null) return new ActionResult { IsSuccess = false, Message = "Could not create DNS provider API. Invalid or unrecognised." };
 
@@ -232,7 +232,7 @@ namespace Certify.Management
 
                 return JsonConvert.DeserializeObject<Dictionary<string, string>>(val);
             }
-            catch (Exception exp)
+            catch (Exception)
             {
                 // failed to decrypt or credential inaccessible
                 return null;

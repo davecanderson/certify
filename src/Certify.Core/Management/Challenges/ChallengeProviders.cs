@@ -1,20 +1,29 @@
-﻿using System.Collections.Generic;
+﻿using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
+using Certify.Core.Management.Challenges.DNS;
 using Certify.Models;
 using Certify.Models.Config;
 using Certify.Models.Providers;
+using Certify.Providers.DNS.Aliyun;
 using Certify.Providers.DNS.AWSRoute53;
 using Certify.Providers.DNS.Azure;
 using Certify.Providers.DNS.Cloudflare;
 using Certify.Providers.DNS.DnsMadeEasy;
 using Certify.Providers.DNS.GoDaddy;
+using Certify.Providers.DNS.OVH;
+using Certify.Providers.DNS.SimpleDNSPlus;
 
 namespace Certify.Core.Management.Challenges
 {
     public class ChallengeProviders
     {
-        public static async Task<IDnsProvider> GetDnsProvider(string providerType, Dictionary<string, string> credentials)
+        public class CredentialsRequiredException : Exception
+        {
+        }
+
+        public static async Task<IDnsProvider> GetDnsProvider(string providerType, Dictionary<string, string> credentials, Dictionary<string, string> parameters, ILog log = null)
         {
             ProviderDefinition providerDefinition;
             IDnsProvider dnsAPIProvider = null;
@@ -30,43 +39,73 @@ namespace Certify.Core.Management.Challenges
 
             if (providerDefinition.HandlerType == Models.Config.ChallengeHandlerType.PYTHON_HELPER)
             {
+                if (credentials == null || !credentials.Any())
+                {
+                    throw new CredentialsRequiredException();
+                }
+
                 dnsAPIProvider = new LibcloudDNSProvider(credentials);
             }
-            else
+            else if (providerDefinition.HandlerType == Models.Config.ChallengeHandlerType.INTERNAL)
             {
-                if (providerDefinition.HandlerType == Models.Config.ChallengeHandlerType.INTERNAL)
+                if (credentials == null || !credentials.Any())
                 {
-                    if (providerDefinition.Id == "DNS01.API.Route53")
-                    {
-                        dnsAPIProvider = new DnsProviderAWSRoute53(credentials);
-                    }
+                    throw new CredentialsRequiredException();
+                }
 
-                    if (providerDefinition.Id == "DNS01.API.Azure")
-                    {
-                        var azureDns = new DnsProviderAzure(credentials);
-                        await azureDns.InitProvider();
-                        dnsAPIProvider = azureDns;
-                    }
+                // instantiate/initialise the required DNS provider
+                if (providerDefinition.Id == DnsProviderAWSRoute53.Definition.Id)
+                {
+                    dnsAPIProvider = new DnsProviderAWSRoute53(credentials);
+                }
+                else if (providerDefinition.Id == DnsProviderAzure.Definition.Id)
+                {
+                    var azureDns = new DnsProviderAzure(credentials);
 
-                    if (providerDefinition.Id == "DNS01.API.Cloudflare")
-                    {
-                        var azureDns = new DnsProviderCloudflare(credentials);
-                        dnsAPIProvider = azureDns;
-                    }
-
-                    if (providerDefinition.Id == "DNS01.API.GoDaddy")
-                    {
-                        var goDaddyDns = new DnsProviderGoDaddy(credentials);
-                        dnsAPIProvider = goDaddyDns;
-                    }
-
-                    if (providerDefinition.Id == "DNS01.API.DnsMadeEasy")
-                    {
-                        var dnsMadeEasy = new DnsProviderDnsMadeEasy(credentials);
-                        dnsAPIProvider = dnsMadeEasy;
-                    }
+                    dnsAPIProvider = azureDns;
+                }
+                else if (providerDefinition.Id == DnsProviderCloudflare.Definition.Id)
+                {
+                    dnsAPIProvider = new DnsProviderCloudflare(credentials);
+                }
+                else if (providerDefinition.Id == DnsProviderGoDaddy.Definition.Id)
+                {
+                    dnsAPIProvider = new DnsProviderGoDaddy(credentials);
+                }
+                else if (providerDefinition.Id == DnsProviderSimpleDNSPlus.Definition.Id)
+                {
+                    dnsAPIProvider = new DnsProviderSimpleDNSPlus(credentials);
+                }
+                else if (providerDefinition.Id == DnsProviderDnsMadeEasy.Definition.Id)
+                {
+                    dnsAPIProvider = new DnsProviderDnsMadeEasy(credentials);
+                }
+                else if (providerDefinition.Id == DnsProviderOvh.Definition.Id)
+                {
+                    dnsAPIProvider = new DnsProviderOvh(credentials);
+                }
+                else if (providerDefinition.Id == DnsProviderAliyun.Definition.Id)
+                {
+                    dnsAPIProvider = new DnsProviderAliyun(credentials);
                 }
             }
+            else if (providerDefinition.HandlerType == Models.Config.ChallengeHandlerType.MANUAL)
+            {
+                if (providerDefinition.Id == DNS.DnsProviderManual.Definition.Id)
+                {
+                    dnsAPIProvider = new DNS.DnsProviderManual(parameters);
+                }
+            }
+            else if (providerDefinition.HandlerType == Models.Config.ChallengeHandlerType.CUSTOM_SCRIPT)
+            {
+                if (providerDefinition.Id == DNS.DnsProviderScripting.Definition.Id)
+                {
+                    dnsAPIProvider = new DNS.DnsProviderScripting(parameters);
+                }
+            }
+
+            await dnsAPIProvider.InitProvider(log);
+
             return dnsAPIProvider;
         }
 
@@ -84,30 +123,16 @@ namespace Certify.Core.Management.Challenges
                     HandlerType = ChallengeHandlerType.INTERNAL
                 },
                 // DNS
+                DnsProviderManual.Definition,
+                DnsProviderScripting.Definition,
                 Providers.DNS.AWSRoute53.DnsProviderAWSRoute53.Definition,
                 Providers.DNS.Azure.DnsProviderAzure.Definition,
                 Providers.DNS.Cloudflare.DnsProviderCloudflare.Definition,
                 Providers.DNS.GoDaddy.DnsProviderGoDaddy.Definition,
+                Providers.DNS.SimpleDNSPlus.DnsProviderSimpleDNSPlus.Definition,
                 Providers.DNS.DnsMadeEasy.DnsProviderDnsMadeEasy.Definition,
-
-                /*
-                 *  new ProviderDefinition
-                {
-                    Id = "DNS01.API.Azure",
-                    ChallengeType = SupportedChallengeTypes.CHALLENGE_TYPE_DNS,
-                    Title = "Azure DNS API",
-                    Description = "Validates via Azure DNS APIs using credentials",
-                    HelpUrl="https://docs.microsoft.com/en-us/azure/dns/dns-sdk",
-                    ProviderParameters = new List<ProviderParameter>{
-                        new ProviderParameter{Name="TenantId", IsRequired=true },
-                        new ProviderParameter{Name="ClientId", IsRequired=true },
-                        new ProviderParameter{Name="Secret", IsRequired=true , IsPassword=true},
-                        new ProviderParameter{Name="DNS Subscription Id", IsRequired=true , IsPassword=true},
-                        new ProviderParameter{Name="Resource Group Name", IsRequired=true , IsPassword=false},
-                    },
-                    Config="Provider=PythonHelper;Driver=AZURE",
-                    HandlerType = ChallengeHandlerType.PYTHON_HELPER
-                }*/
+                Providers.DNS.OVH.DnsProviderOvh.Definition,
+                Providers.DNS.Aliyun.DnsProviderAliyun.Definition
             };
 
             return await Task.FromResult(providers);

@@ -10,7 +10,6 @@ using System.Threading;
 using System.Threading.Tasks;
 using ARSoft.Tools.Net;
 using ARSoft.Tools.Net.Dns;
-using Certify.Locales;
 using Certify.Models.Config;
 using Certify.Models.Providers;
 
@@ -82,6 +81,8 @@ namespace Certify.Management
                 {
                     using (var client = new HttpClient())
                     {
+                        client.DefaultRequestHeaders.Add("User-Agent", Management.Util.GetUserAgent());
+
                         var resp = await client.SendAsync(req);
                         // if the GET request succeeded, the Cert validation succeeded
                         Log($"Local TLS SNI binding check OK: {host}, {sni}"); ;
@@ -134,7 +135,7 @@ namespace Certify.Management
             try
             {
                 var request = WebRequest.Create(!useProxy ? url :
-                    ConfigResources.APIBaseURI + "configcheck/testurl?url=" + url);
+                    Models.API.Config.APIBaseURI + "configcheck/testurl?url=" + url);
 
                 request.Timeout = 5000;
 
@@ -144,7 +145,7 @@ namespace Certify.Management
                     return true;
                 };
 
-                log.Information("Checking URL is accessible: {url} proxyAPI: {proxyAPI}, timeoutMs: ", url, useProxy, request.Timeout);
+                log.Information($"Checking URL is accessible: {url} [proxyAPI: {useProxy}, timeout: {request.Timeout}ms]");
 
                 var response = (HttpWebResponse)await request.GetResponseAsync();
 
@@ -168,7 +169,7 @@ namespace Certify.Management
                             }
                             else
                             {
-                                log.Information("(proxy api) URL is not accessible. Result: {result}", result);
+                                log.Information($"(proxy api) URL is not accessible. Result: [{result.StatusCode}] {result.Message}");
                             }
                         }
                     }
@@ -196,7 +197,7 @@ namespace Certify.Management
             {
                 if (useProxy)
                 {
-                    log.Warning($"Problem checking URL is accessible : {url} {exp.Message}", url);
+                    log.Warning($"Problem checking URL is accessible : {url} {exp.Message}");
 
                     // failed to call proxy API (maybe offline?), let's try a local check
                     return await CheckURL(log, url, false);
@@ -204,7 +205,7 @@ namespace Certify.Management
                 else
                 {
                     // failed to check URL locally
-                    log.Error(exp, "Failed to confirm URL is accessible : {url} ", url);
+                    log.Error(exp, $"Failed to confirm URL is accessible : {url} ");
 
                     return false;
                 }
@@ -267,7 +268,7 @@ namespace Certify.Management
             }
         }
 
-        public async Task<List<ActionResult>> CheckDNS(ILog log, string domain, bool? useProxyAPI = null)
+        public async Task<List<ActionResult>> CheckDNS(ILog log, string domain, bool? useProxyAPI = null, bool includeIPCheck = true)
         {
             var results = new List<ActionResult>();
 
@@ -289,29 +290,32 @@ namespace Certify.Management
                 // TODO: update proxy and implement proxy check here return (ok, message);
             }
 
-            // check dns
-            try
+            // check dns resolves to IP
+            if (includeIPCheck)
             {
-                log.Information($"Checking DNS name resolves to IP: {domain}");
-
-                var result = await Dns.GetHostEntryAsync(domain); // this throws SocketException for bad DNS
-
-                results.Add(new ActionResult
+                try
                 {
-                    IsSuccess = true,
-                    Message = $"CheckDNS: '{domain}' resolved to an IP Address {result.AddressList[0].ToString()}. "
-                });
-            }
-            catch
-            {
-                results.Add(new ActionResult
-                {
-                    IsSuccess = false,
-                    Message = $"CheckDNS: '{domain}' failed to resolve to an IP Address. "
-                });
+                    log.Information($"Checking DNS name resolves to IP: {domain}");
 
-                log.Error(results.Last().Message);
-                return results;
+                    var result = await Dns.GetHostEntryAsync(domain); // this throws SocketException for bad DNS
+
+                    results.Add(new ActionResult
+                    {
+                        IsSuccess = true,
+                        Message = $"CheckDNS: '{domain}' resolved to an IP Address {result.AddressList[0].ToString()}. "
+                    });
+                }
+                catch
+                {
+                    results.Add(new ActionResult
+                    {
+                        IsSuccess = false,
+                        Message = $"CheckDNS: '{domain}' failed to resolve to an IP Address. "
+                    });
+
+                    log.Error(results.Last().Message);
+                    return results;
+                }
             }
 
             DnsMessage caa_query = null;

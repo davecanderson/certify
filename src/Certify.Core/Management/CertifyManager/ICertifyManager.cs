@@ -24,12 +24,16 @@ namespace Certify.Management
 
         Task DeleteManagedCertificate(string id);
 
+        Task<List<SimpleAuthorizationChallengeItem>> GetCurrentChallengeResponses(string challengeType);
+
         List<RegistrationItem> GetContactRegistrations();
 
         string GetPrimaryContactEmail();
 
         Task<List<StatusMessage>> TestChallenge(ILog log, ManagedCertificate managedCertificate, bool isPreviewMode, IProgress<RequestProgressState> progress = null);
 
+        Task<List<DnsZone>> GetDnsProviderZones(string providerTypeId, string credentialsId);
+        
         Task<StatusMessage> RevokeCertificate(ILog log, ManagedCertificate managedCertificate);
 
         Task<CertificateRequestResult> PerformDummyCertificateRequest(ManagedCertificate managedCertificate, IProgress<RequestProgressState> progress = null);
@@ -44,7 +48,7 @@ namespace Certify.Management
 
         Task<CertificateRequestResult> DeployCertificate(ManagedCertificate managedCertificate, IProgress<RequestProgressState> progress = null, bool isPreviewOnly = false);
 
-        Task<CertificateRequestResult> PerformCertificateRequest(ILog log, ManagedCertificate managedCertificate, IProgress<RequestProgressState> progress = null);
+        Task<CertificateRequestResult> PerformCertificateRequest(ILog log, ManagedCertificate managedCertificate, IProgress<RequestProgressState> progress = null, bool resumePaused = false);
 
         Task<List<DomainOption>> GetDomainOptionsFromSite(string siteId);
 
@@ -55,6 +59,8 @@ namespace Certify.Management
         Task<bool> PerformPeriodicTasks();
 
         Task<bool> PerformDailyTasks();
+
+        Task PerformCertificateCleanup();
 
         Task<List<ActionStep>> GeneratePreview(ManagedCertificate item);
 

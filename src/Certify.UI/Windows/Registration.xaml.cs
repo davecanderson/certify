@@ -1,4 +1,4 @@
-using Certify.Management;
+﻿using Certify.Management;
 using System;
 using System.Windows;
 using System.Windows.Input;
@@ -10,9 +10,13 @@ namespace Certify.UI.Windows
     /// </summary>
     public partial class Registration
     {
+        Models.Providers.ILog _log;
+
         public Registration()
         {
             InitializeComponent();
+
+            _log = ((Certify.UI.App)App.Current).Log;
         }
 
         private async void ValidateKey_Click(object sender, RoutedEventArgs e)
@@ -49,7 +53,7 @@ namespace Certify.UI.Windows
                         var instance = new Models.Shared.RegisteredInstance
                         {
                             InstanceId = ViewModel.AppViewModel.Current.Preferences.InstanceId,
-                            AppVersion = new Management.Util().GetAppVersion().ToString()
+                            AppVersion = Management.Util.GetAppVersion().ToString()
                         };
 
                         var installRegistration = await licensingManager.RegisterInstall(productTypeId, email, key, instance);
@@ -77,8 +81,11 @@ namespace Certify.UI.Windows
                         MessageBox.Show(validationResult.ValidationMessage);
                     }
                 }
-                catch (Exception)
+                catch (Exception exp)
                 {
+                    
+                    _log?.Information("ValidateKey:"+exp.ToString());
+
                     MessageBox.Show(Certify.Locales.SR.Registration_KeyValidationError);
                 }
             }

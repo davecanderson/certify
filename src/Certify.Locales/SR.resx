@@ -220,7 +220,7 @@
     <value>Sorry, there was a problem submitting your feedback.</value>
   </data>
   <data name="New_Contact_EmailError" xml:space="preserve">
-    <value>Ooops, you forgot to provide a valid email address.</value>
+    <value>There was a problem registering with Let's Encrypt using this email address. Check the email address is valid and that this computer has an open connection to the internet (outgoing https is required for API calls).</value>
   </data>
   <data name="New_Contact_NeedAgree" xml:space="preserve">
     <value>You need to agree to the latest LetsEncrypt.org Subscriber Agreement.</value>
@@ -265,7 +265,7 @@
     <value>Password</value>
   </data>
   <data name="AboutControl_TrialDetailLabel" xml:space="preserve">
-    <value>This version is free for evaluation and is limited to managing up to 5 websites. To remove this limit please purchase a registration key. If you have previously donated please email apps@webprofusion.com with details of your sponsorship PayPal transaction to obtain a free key. This offer is also open to developers who have PRs accepted for this app on GitHub.</value>
+    <value>This version is free for evaluation and is limited to managing up to 5 certificates. To remove this limit please purchase a registration key. If you have previously donated please email apps@webprofusion.com with details of your sponsorship PayPal transaction to obtain a free key. This offer is also open to developers who have PRs accepted for this app on GitHub.</value>
   </data>
   <data name="AboutControl_RegistrationTypeLabel" xml:space="preserve">
     <value>Not Registered</value>
@@ -594,7 +594,7 @@
     <value>The current app version is no longer supported. Please update to proceed.</value>
   </data>
   <data name="ManagedCertificateSettings_BindingNote" xml:space="preserve">
-    <value>Note: these setting only apply to new https bindings, existing bindings are only updated with the new certificate.</value>
+    <value>Note: these setting only apply to new https bindings, existing bindings are only updated with the new certificate. Using a fixed IP for multiple certificates will cause a binding conflict on Windows, use with caution.</value>
   </data>
   <data name="ManagedCertificateSettings_ReapplyCertificate" xml:space="preserve">
     <value>Re-apply Certificate to Bindings</value>
@@ -658,5 +658,14 @@
   </data>
   <data name="ManagedCertificateSettings_AddDomainsHelpText" xml:space="preserve">
     <value>e.g. test.com, www.test.com or *.test.com</value>
+  </data>
+  <data name="Settings_EnableHttpChallengeServer" xml:space="preserve">
+    <value>Enable Http Challenge Server</value>
+  </data>
+  <data name="Settings_EnableCertificateCleanup" xml:space="preserve">
+    <value>Enable Certificate Cleanup</value>
+  </data>
+  <data name="Settings_EnableStatusReporting" xml:space="preserve">
+    <value>Enable Status Reports to Dashboard</value>
   </data>
 </root>
